@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { Calculator, ChevronDown, Loader2, RefreshCw, FileText, Search, ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -526,8 +526,7 @@ export default function QuotePage() {
         })
       }
 
-      // Generate PDF using dynamic import to avoid SSR issues
-      const React = await import('react')
+      // Dynamically import PDF libs to avoid SSR issues
       const { pdf } = await import('@react-pdf/renderer')
       const { QuotationPDF } = await import('@/components/pdf/QuotationPDF')
 
