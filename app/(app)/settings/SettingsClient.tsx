@@ -1,0 +1,370 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Settings, Building, Upload, Loader2, Check } from 'lucide-react'
+import { createClient } from '@/lib/supabase/client'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { toast } from 'sonner'
+
+interface UserProfile {
+  id?: string
+  company_name?: string
+  company_name_cn?: string
+  logo_url?: string
+  address?: string
+  phone?: string
+  email?: string
+  website?: string
+  default_currency?: string
+  default_payment_terms?: string
+  default_validity?: number
+}
+
+const currencies = [
+  { value: 'USD', label: 'USD - 美元' },
+  { value: 'EUR', label: 'EUR - 欧元' },
+  { value: 'GBP', label: 'GBP - 英镑' },
+  { value: 'CNY', label: 'CNY - 人民币' },
+]
+
+const paymentTermsOptions = [
+  { value: 'T/T 30% deposit, 70% before shipment', label: 'T/T 30% 定金，70% 出货前付清' },
+  { value: 'T/T 50% deposit, 50% before shipment', label: 'T/T 50% 定金，50% 出货前付清' },
+  { value: 'T/T 100% before shipment', label: 'T/T 100% 出货前付清' },
+  { value: 'L/C at sight', label: 'L/C 即期' },
+  { value: 'L/C 30 days', label: 'L/C 30天' },
+  { value: 'D/P at sight', label: 'D/P 即期' },
+  { value: 'PayPal', label: 'PayPal' },
+  { value: 'Western Union', label: '西联汇款' },
+]
+
+export function SettingsClient() {
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [profile, setProfile] = useState<UserProfile | null>(null)
+  const [formData, setFormData] = useState({
+    company_name: '',
+    company_name_cn: '',
+    logo_url: '',
+    address: '',
+    phone: '',
+    email: '',
+    website: '',
+    default_currency: 'USD',
+    default_payment_terms: 'T/T 30% deposit, 70% before shipment',
+    default_validity: 30,
+  })
+
+  const supabase = createClient()
+
+  useEffect(() => {
+    fetchProfile()
+  }, [])
+
+  const fetchProfile = async () => {
+    try {
+      const res = await fetch('/api/user-profile', {
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const data = await res.json()
+      if (data) {
+        setProfile(data)
+        setFormData({
+          company_name: data.company_name || '',
+          company_name_cn: data.company_name_cn || '',
+          logo_url: data.logo_url || '',
+          address: data.address || '',
+          phone: data.phone || '',
+          email: data.email || '',
+          website: data.website || '',
+          default_currency: data.default_currency || 'USD',
+          default_payment_terms: data.default_payment_terms || 'T/T 30% deposit, 70% before shipment',
+          default_validity: data.default_validity || 30,
+        })
+      }
+    } catch (error) {
+      console.error('Error fetching profile:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setUploading(true)
+    try {
+      // Upload to Supabase Storage
+      const fileExt = file.name.split('.').pop()
+      const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`
+
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('logos')
+        .upload(fileName, file)
+
+      if (uploadError) {
+        toast.error('上传失败: ' + uploadError.message)
+        return
+      }
+
+      // Get public URL
+      const { data: urlData } = supabase.storage.from('logos').getPublicUrl(fileName)
+
+      const logoUrl = urlData.publicUrl
+      setFormData({ ...formData, logo_url: logoUrl })
+      toast.success('Logo 上传成功')
+    } catch (error) {
+      console.error('Upload error:', error)
+      toast.error('上传失败')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const res = await fetch('/api/user-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData),
+      })
+
+      const data = await res.json()
+      if (data.error) {
+        toast.error('保存失败: ' + data.error)
+      } else {
+        setProfile(data)
+        toast.success('保存成功')
+      }
+    } catch (error) {
+      console.error('Save error:', error)
+      toast.error('保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-8 pt-16 md:pt-8 space-y-6">
+      <div className="flex items-center gap-3 mb-6">
+        <Settings className="w-6 h-6" />
+        <h1 className="text-2xl font-bold">用户设置</h1>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Company Info */}
+        <Card className="md:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Building className="w-5 h-5" />
+              公司信息
+            </CardTitle>
+            <CardDescription>
+              设置公司信息，这些信息将用于生成报价单
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {/* Logo Upload */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">公司 Logo</label>
+              <div className="flex items-center gap-4">
+                <div className="w-24 h-24 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center overflow-hidden bg-gray-50">
+                  {formData.logo_url ? (
+                    <img
+                      src={formData.logo_url}
+                      alt="Logo"
+                      className="w-full h-full object-contain"
+                    />
+                  ) : (
+                    <Upload className="w-8 h-8 text-gray-400" />
+                  )}
+                </div>
+                <div>
+                  <label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleLogoUpload}
+                      disabled={uploading}
+                      className="hidden"
+                    />
+                    <Button variant="outline" size="sm" asChild>
+                      <span className="cursor-pointer">
+                        {uploading ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            上传中...
+                          </>
+                        ) : (
+                          '上传 Logo'
+                        )}
+                      </span>
+                    </Button>
+                  </label>
+                  <p className="text-xs text-gray-500 mt-1">支持 PNG、JPG，建议 200x200</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Company Name */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">公司名称（英文）*</label>
+                <Input
+                  value={formData.company_name}
+                  onChange={(e) => setFormData({ ...formData, company_name: e.target.value })}
+                  placeholder="ABC Trading Co., Ltd."
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">公司名称（中文）</label>
+                <Input
+                  value={formData.company_name_cn}
+                  onChange={(e) => setFormData({ ...formData, company_name_cn: e.target.value })}
+                  placeholder="ABC 贸易有限公司"
+                />
+              </div>
+            </div>
+
+            {/* Address */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">公司地址</label>
+              <Input
+                value={formData.address}
+                onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                placeholder="No. 123, XXX Road, City, Country"
+              />
+            </div>
+
+            {/* Contact Info */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">电话</label>
+                <Input
+                  value={formData.phone}
+                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  placeholder="+86 123 4567 8900"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">邮箱</label>
+                <Input
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  placeholder="sales@example.com"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">网站</label>
+                <Input
+                  value={formData.website}
+                  onChange={(e) => setFormData({ ...formData, website: e.target.value })}
+                  placeholder="https://www.example.com"
+                />
+              </div>
+            </div>
+
+            {/* Default Settings */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">默认报价货币</label>
+                <Select
+                  value={formData.default_currency}
+                  onValueChange={(value) =>
+                    setFormData({ ...formData, default_currency: value })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择货币" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {currencies.map((c) => (
+                      <SelectItem key={c.value} value={c.value}>
+                        {c.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">默认付款条件</label>
+                <Select
+                  value={formData.default_payment_terms}
+                  onValueChange={(value) =>
+                    setFormData({ ...formData, default_payment_terms: value })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择付款条件" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {paymentTermsOptions.map((p) => (
+                      <SelectItem key={p.value} value={p.value}>
+                        {p.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">报价有效天数</label>
+                <Select
+                  value={String(formData.default_validity)}
+                  onValueChange={(value) =>
+                    setFormData({ ...formData, default_validity: Number(value) })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择天数" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="7">7 天</SelectItem>
+                    <SelectItem value="14">14 天</SelectItem>
+                    <SelectItem value="30">30 天</SelectItem>
+                    <SelectItem value="60">60 天</SelectItem>
+                    <SelectItem value="90">90 天</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <Button onClick={handleSave} disabled={saving} className="w-full">
+              {saving ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  保存中...
+                </>
+              ) : (
+                <>
+                  <Check className="mr-2 h-4 w-4" />
+                  保存设置
+                </>
+              )}
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  )
+}
