@@ -89,6 +89,17 @@ interface UserProfile {
   default_validity?: number
 }
 
+// Change 2: PDFProductRow interface
+interface PDFProductRow {
+  name: string
+  model: string
+  specs: string
+  qty: number
+  unit: string
+  unit_price_foreign: number
+  amount_foreign: number
+}
+
 function calculateQuote(
   costPrice: number,
   quantity: number,
@@ -175,6 +186,8 @@ export default function QuotePage() {
   const [rateUpdatedAt, setRateUpdatedAt] = useState('')
 
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
+  // Change 1: manual product name when no library product selected
+  const [productName, setProductName] = useState('') // manual product name input
   const [productDialogOpen, setProductDialogOpen] = useState(false)
   const [formData, setFormData] = useState({
     productCost: '',
@@ -223,6 +236,8 @@ export default function QuotePage() {
   })
   const [generating, setGenerating] = useState(false)
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
+  // Change 2: pdfProducts state for multi-product support
+  const [pdfProducts, setPdfProducts] = useState<PDFProductRow[]>([])
 
   // ── Computed values ─────────────────────────────────────────────
   const results = useMemo(() => {
@@ -308,6 +323,20 @@ export default function QuotePage() {
     })
   }, [quoteDetails.tradeTerm])
 
+  // Change 8: Sync first row's price when trade term changes
+  useEffect(() => {
+    if (!selectedTradeResult || pdfProducts.length === 0) return
+    setPdfProducts(prev => {
+      const updated = [...prev]
+      updated[0] = {
+        ...updated[0],
+        unit_price_foreign: selectedTradeResult.priceForeign,
+        amount_foreign: selectedTradeResult.priceForeign * updated[0].qty,
+      }
+      return updated
+    })
+  }, [selectedTradeResult])
+
   // ── Existing functions ──────────────────────────────────────────
   const fetchProducts = async () => {
     try {
@@ -337,8 +366,10 @@ export default function QuotePage() {
     }
   }
 
+  // Change 4: clear productName when selecting from library
   const handleProductSelect = (product: Product) => {
     setSelectedProduct(product)
+    setProductName('')
     setFormData({ ...formData, productCost: String(product.cost_price) })
     setProductDialogOpen(false)
   }
@@ -383,6 +414,7 @@ export default function QuotePage() {
   }
 
   // ── Quote dialog functions ──────────────────────────────────────
+  // Change 5: initialize pdfProducts with one row from the calculator
   const openQuoteDialog = async () => {
     // Reset dialog state
     setQuoteStep(1)
@@ -408,6 +440,23 @@ export default function QuotePage() {
     } catch {
       // continue with defaults
     }
+
+    // Initialize PDF products with the main calculator row
+    const qty = parseFloat(formData.quantity) || 1
+    const name = selectedProduct?.name || productName || '产品'
+    const model = selectedProduct?.model || ''
+    const specs = selectedProduct?.specs || ''
+    const unit = selectedProduct?.unit || 'pc'
+    // We'll update prices when the user picks the trade term in step 2
+    setPdfProducts([{
+      name,
+      model,
+      specs,
+      qty,
+      unit,
+      unit_price_foreign: 0, // will be set when trade term is selected
+      amount_foreign: 0,
+    }])
 
     setQuoteDialogOpen(true)
   }
@@ -438,6 +487,7 @@ export default function QuotePage() {
     }
   }
 
+  // Change 6 & 9: updated handleGeneratePDF
   const handleGeneratePDF = async () => {
     if (!selectedCustomer && !isNewCustomer) {
       toast.error('请选择或新建客户')
@@ -449,6 +499,11 @@ export default function QuotePage() {
     }
     if (!selectedTradeResult) {
       toast.error('请先填写成本信息并计算报价')
+      return
+    }
+    // Change 9: validate pdfProducts have names
+    if (pdfProducts.length === 0 || pdfProducts.some(p => !p.name.trim())) {
+      toast.error('请填写所有产品名称')
       return
     }
 
@@ -472,20 +527,21 @@ export default function QuotePage() {
         customerContact = data.contact_name || ''
       }
 
-      const qty = parseFloat(formData.quantity) || 1
-      const unitPriceForeign = selectedTradeResult.priceForeign
-      const amountForeign = unitPriceForeign * qty
-      const amountCNY = selectedTradeResult.priceCNY * qty
+      // Change 6: Compute totals from all PDF product rows
+      const totalForeign = pdfProducts.reduce((s, p) => s + p.amount_foreign, 0)
+      const totalCNY = totalForeign / exchangeRate
+      const amountForeign = totalForeign
+      const amountCNY = totalCNY
 
-      const productForDB = {
-        name: selectedProduct?.name || '产品',
-        model: selectedProduct?.model || undefined,
-        qty,
-        unit: selectedProduct?.unit || 'pc',
+      const productsForDB = pdfProducts.map(p => ({
+        name: p.name,
+        model: p.model || undefined,
+        qty: p.qty,
+        unit: p.unit,
         cost_price: parseFloat(formData.productCost) || 0,
-        unit_price_foreign: unitPriceForeign,
-        amount_foreign: amountForeign,
-      }
+        unit_price_foreign: p.unit_price_foreign,
+        amount_foreign: p.amount_foreign,
+      }))
 
       // Save quotation to DB first to get the auto-generated number
       const saveRes = await fetch('/api/quotations', {
@@ -496,7 +552,7 @@ export default function QuotePage() {
           trade_term: quoteDetails.tradeTerm,
           currency: formData.currency,
           exchange_rate: exchangeRate,
-          products: [productForDB],
+          products: productsForDB,
           costs: {
             domestic_cost: parseFloat(formData.domesticCost) || 0,
             freight: parseFloat(formData.freight) || 0,
@@ -551,17 +607,15 @@ export default function QuotePage() {
         validityDays: quoteDetails.validityDays,
         tradeTerm: quoteDetails.tradeTerm,
         currency: formData.currency,
-        products: [
-          {
-            name: selectedProduct?.name || '产品',
-            model: selectedProduct?.model || undefined,
-            specs: selectedProduct?.specs || undefined,
-            qty,
-            unit: selectedProduct?.unit || 'pc',
-            unit_price_foreign: unitPriceForeign,
-            amount_foreign: amountForeign,
-          },
-        ],
+        products: pdfProducts.map(p => ({
+          name: p.name,
+          model: p.model || undefined,
+          specs: p.specs || undefined,
+          qty: p.qty,
+          unit: p.unit,
+          unit_price_foreign: p.unit_price_foreign,
+          amount_foreign: p.amount_foreign,
+        })),
         totalAmount: amountForeign,
         paymentTerms: quoteDetails.paymentTerms,
         deliveryTime: quoteDetails.deliveryTime,
@@ -670,6 +724,18 @@ export default function QuotePage() {
                 </DialogContent>
               </Dialog>
             </div>
+
+            {/* Change 3: Manual product name – shown when nothing selected from library */}
+            {!selectedProduct && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">产品名称（报价单显示）</label>
+                <Input
+                  value={productName}
+                  onChange={(e) => setProductName(e.target.value)}
+                  placeholder="如 LED Flood Light 100W"
+                />
+              </div>
+            )}
 
             {/* Basic Inputs */}
             <div className="grid grid-cols-2 gap-4">
@@ -1150,30 +1216,112 @@ export default function QuotePage() {
                 </div>
               </div>
 
-              {/* Total preview */}
+              {/* Change 7: Products rows – replaces old single-product total preview */}
               {selectedTradeResult && (
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-blue-600">
-                      {quoteDetails.tradeTerm} 单价：
-                    </span>
-                    <span className="font-bold text-blue-800">
-                      {getCurrencySymbol(formData.currency)}
-                      {formatPrice(selectedTradeResult.priceForeign)} /{' '}
-                      {selectedProduct?.unit || 'pc'}
-                    </span>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium">产品明细</label>
+                    <button
+                      type="button"
+                      className="text-xs text-blue-600 hover:underline"
+                      onClick={() => {
+                        setPdfProducts(prev => [...prev, {
+                          name: '',
+                          model: '',
+                          specs: '',
+                          qty: 1,
+                          unit: selectedProduct?.unit || 'pc',
+                          unit_price_foreign: selectedTradeResult.priceForeign,
+                          amount_foreign: selectedTradeResult.priceForeign,
+                        }])
+                      }}
+                    >
+                      + 添加行
+                    </button>
                   </div>
-                  <div className="flex justify-between mt-1">
-                    <span className="text-blue-600">
-                      总额（×{formData.quantity}）：
-                    </span>
-                    <span className="font-bold text-blue-800">
-                      {getCurrencySymbol(formData.currency)}
-                      {(
-                        selectedTradeResult.priceForeign *
-                        (parseFloat(formData.quantity) || 1)
-                      ).toFixed(2)}
-                    </span>
+                  <div className="border rounded-lg overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="text-left p-2 font-medium text-gray-500">产品名称</th>
+                          <th className="text-right p-2 font-medium text-gray-500 w-16">数量</th>
+                          <th className="text-right p-2 font-medium text-gray-500 w-20">单价</th>
+                          <th className="text-right p-2 font-medium text-gray-500 w-20">小计</th>
+                          <th className="p-2 w-6"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pdfProducts.map((row, idx) => {
+                          // sync unit price from trade term for first row if it's the main product
+                          const isMain = idx === 0
+                          return (
+                            <tr key={idx} className="border-t">
+                              <td className="p-1">
+                                <input
+                                  className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
+                                  value={row.name}
+                                  onChange={e => {
+                                    const updated = [...pdfProducts]
+                                    updated[idx] = { ...updated[idx], name: e.target.value }
+                                    setPdfProducts(updated)
+                                  }}
+                                  placeholder="产品名称"
+                                />
+                              </td>
+                              <td className="p-1">
+                                <input
+                                  type="number"
+                                  className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
+                                  value={row.qty}
+                                  onChange={e => {
+                                    const qty = parseFloat(e.target.value) || 1
+                                    const updated = [...pdfProducts]
+                                    updated[idx] = { ...updated[idx], qty, amount_foreign: qty * updated[idx].unit_price_foreign }
+                                    setPdfProducts(updated)
+                                  }}
+                                />
+                              </td>
+                              <td className="p-1">
+                                <input
+                                  type="number"
+                                  className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
+                                  value={row.unit_price_foreign.toFixed(4)}
+                                  onChange={e => {
+                                    const price = parseFloat(e.target.value) || 0
+                                    const updated = [...pdfProducts]
+                                    updated[idx] = { ...updated[idx], unit_price_foreign: price, amount_foreign: price * updated[idx].qty }
+                                    setPdfProducts(updated)
+                                  }}
+                                />
+                              </td>
+                              <td className="p-2 text-right font-medium">
+                                {getCurrencySymbol(formData.currency)}{row.amount_foreign.toFixed(2)}
+                              </td>
+                              <td className="p-1 text-center">
+                                {pdfProducts.length > 1 && (
+                                  <button
+                                    type="button"
+                                    className="text-red-400 hover:text-red-600 text-xs"
+                                    onClick={() => setPdfProducts(prev => prev.filter((_, i) => i !== idx))}
+                                  >
+                                    ×
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                      <tfoot className="bg-gray-50 border-t">
+                        <tr>
+                          <td colSpan={3} className="p-2 text-right text-xs font-bold text-gray-600">合计</td>
+                          <td className="p-2 text-right text-xs font-bold text-blue-700">
+                            {getCurrencySymbol(formData.currency)}{pdfProducts.reduce((s, p) => s + p.amount_foreign, 0).toFixed(2)}
+                          </td>
+                          <td></td>
+                        </tr>
+                      </tfoot>
+                    </table>
                   </div>
                 </div>
               )}

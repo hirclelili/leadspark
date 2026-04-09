@@ -1,67 +1,71 @@
 import { NextResponse } from 'next/server'
 
-// In-memory cache
-let cachedRate: { rate: number; updatedAt: string } | null = null
+// Cache all rates from a single API call (CNY as base)
+let allRatesCache: Record<string, number> | null = null
 let cacheTime = 0
+let cacheUpdatedAt = ''
 const CACHE_DURATION = 60 * 60 * 1000 // 1 hour
 
 export async function POST(request: Request) {
+  let targetCurrency = 'USD'
+
   try {
     const body = await request.json()
-    const { targetCurrency = 'USD' } = body
+    targetCurrency = body.targetCurrency || 'USD'
 
     const now = Date.now()
 
-    // Check cache
-    if (cachedRate && now - cacheTime < CACHE_DURATION) {
-      return NextResponse.json({
-        rate: cachedRate.rate,
-        from: 'CNY',
-        to: targetCurrency,
-        updatedAt: cachedRate.updatedAt,
-      })
+    // Return from cache if still fresh (all currencies cached together)
+    if (allRatesCache && now - cacheTime < CACHE_DURATION) {
+      const rate = allRatesCache[targetCurrency]
+      if (rate) {
+        return NextResponse.json({
+          rate,
+          from: 'CNY',
+          to: targetCurrency,
+          updatedAt: cacheUpdatedAt,
+        })
+      }
     }
 
-    // Fetch from API
-    const res = await fetch(
-      `https://open.er-api.com/v6/latest/CNY`,
-      { next: { revalidate: 3600 } }
-    )
-
-    if (!res.ok) {
-      throw new Error('Failed to fetch exchange rate')
-    }
+    // Fetch all rates with CNY as base currency
+    const res = await fetch('https://open.er-api.com/v6/latest/CNY')
+    if (!res.ok) throw new Error('Exchange rate API unavailable')
 
     const data = await res.json()
+    if (data.result !== 'success') throw new Error('Exchange rate API error')
 
-    if (data.result !== 'success') {
-      throw new Error('API error')
-    }
-
-    const rates = data.rates || {}
-    const rate = rates[targetCurrency] || 1
-
-    // Update cache
-    cachedRate = { rate, updatedAt: new Date().toISOString() }
+    // Cache the full rate map
+    allRatesCache = data.rates || {}
     cacheTime = now
+    cacheUpdatedAt = new Date().toISOString()
+
+    const rate = allRatesCache![targetCurrency]
+    if (!rate) throw new Error(`Currency not found: ${targetCurrency}`)
 
     return NextResponse.json({
       rate,
       from: 'CNY',
       to: targetCurrency,
-      updatedAt: cachedRate.updatedAt,
+      updatedAt: cacheUpdatedAt,
     })
   } catch (error: any) {
-    // Return default rate if API fails
-    const defaultRates: Record<string, number> = {
-      USD: 0.14,
-      EUR: 0.13,
-      GBP: 0.11,
+    // Try stale cache first before hard fallback
+    if (allRatesCache?.[targetCurrency]) {
+      return NextResponse.json({
+        rate: allRatesCache[targetCurrency],
+        from: 'CNY',
+        to: targetCurrency,
+        updatedAt: cacheUpdatedAt,
+        warning: 'stale cache',
+      })
     }
+    // Hard-coded fallback rates
+    const fallback: Record<string, number> = { USD: 0.1380, EUR: 0.1270, GBP: 0.1090 }
     return NextResponse.json({
-      rate: defaultRates.USD || 0.14,
+      rate: fallback[targetCurrency] ?? 0.138,
       from: 'CNY',
-      to: 'USD',
+      to: targetCurrency,
       updatedAt: new Date().toISOString(),
       error: error.message,
     })
