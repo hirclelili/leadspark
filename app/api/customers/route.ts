@@ -44,7 +44,7 @@ export async function POST(request: Request) {
 
     const supabase = createAdminClient()
     const body = await request.json()
-    const { company_name, contact_name, email, phone, country, status, notes } = body
+    const { company_name, contact_name, email, phone, country, address, status, notes } = body
 
     if (!company_name) {
       return NextResponse.json({ error: '公司名称为必填' }, { status: 400 })
@@ -59,6 +59,7 @@ export async function POST(request: Request) {
         email,
         phone,
         country,
+        address,
         status: status || 'new',
         notes,
       })

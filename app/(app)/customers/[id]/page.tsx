@@ -26,6 +26,7 @@ interface Customer {
   email: string | null
   phone: string | null
   country: string | null
+  address: string | null
   status: string
   notes: string | null
   created_at: string
@@ -38,7 +39,7 @@ interface Quotation {
   currency: string
   total_amount_foreign: number
   created_at: string
-  products?: Array<{ name: string; qty: number; unit: string }>
+  products?: Array<{ name: string; qty: number; unit: string; unit_price_foreign?: number }>
 }
 
 interface Remark {
@@ -73,6 +74,7 @@ export default function CustomerDetailPage() {
     email: '',
     phone: '',
     country: '',
+    address: '',
     status: 'new',
     notes: '',
   })
@@ -106,6 +108,7 @@ export default function CustomerDetailPage() {
           email: data.customer.email || '',
           phone: data.customer.phone || '',
           country: data.customer.country || '',
+          address: data.customer.address || '',
           status: data.customer.status,
           notes: data.customer.notes || '',
         })
@@ -227,6 +230,7 @@ export default function CustomerDetailPage() {
                       email: customer?.email || '',
                       phone: customer?.phone || '',
                       country: customer?.country || '',
+                      address: customer?.address || '',
                       status: customer?.status || 'new',
                       notes: customer?.notes || '',
                     })
@@ -294,6 +298,16 @@ export default function CustomerDetailPage() {
                   </div>
                 </div>
                 <div className="space-y-2">
+                  <label className="text-sm font-medium">地址</label>
+                  <Input
+                    value={formData.address}
+                    onChange={(e) =>
+                      setFormData({ ...formData, address: e.target.value })
+                    }
+                    placeholder="公司地址"
+                  />
+                </div>
+                <div className="space-y-2">
                   <label className="text-sm font-medium">状态</label>
                   <Select
                     value={formData.status}
@@ -350,6 +364,12 @@ export default function CustomerDetailPage() {
                   <div className="flex items-center gap-3 text-gray-600">
                     <Phone className="w-5 h-5 text-gray-400" />
                     <span>{customer.phone}</span>
+                  </div>
+                )}
+                {customer?.address && (
+                  <div className="flex items-center gap-3 text-gray-600">
+                    <Building className="w-5 h-5 text-gray-400" />
+                    <span className="text-sm">{customer.address}</span>
                   </div>
                 )}
                 <div className="flex items-center gap-3">
@@ -418,9 +438,16 @@ export default function CustomerDetailPage() {
                           </span>
                         )}
                       </span>
-                      <span className="font-medium text-blue-700">
-                        {formatPrice(q.total_amount_foreign, q.currency)}
-                      </span>
+                      <div className="text-right">
+                        {q.products && q.products.length > 0 && q.products[0].unit_price_foreign != null && (
+                          <div className="text-xs text-gray-400">
+                            单价 {formatPrice(q.products[0].unit_price_foreign, q.currency)}
+                          </div>
+                        )}
+                        <span className="font-medium text-blue-700">
+                          {formatPrice(q.total_amount_foreign, q.currency)}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 ))}

@@ -74,6 +74,7 @@ interface Customer {
   contact_name?: string
   email?: string
   country?: string
+  address?: string
   status: string
 }
 
@@ -218,6 +219,7 @@ export default function QuotePage() {
     email: '',
     phone: '',
     country: '',
+    address: '',
   })
   const [lastQuote, setLastQuote] = useState<{
     date: string
@@ -235,6 +237,7 @@ export default function QuotePage() {
     validityDays: 30,
   })
   const [generating, setGenerating] = useState(false)
+  const [previewing, setPreviewing] = useState(false)
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   // Change 2: pdfProducts state for multi-product support
   const [pdfProducts, setPdfProducts] = useState<PDFProductRow[]>([])
@@ -423,7 +426,7 @@ export default function QuotePage() {
     setCustomerQuery('')
     setCustomerResults([])
     setLastQuote(null)
-    setNewCustomerData({ company_name: '', contact_name: '', email: '', phone: '', country: '' })
+    setNewCustomerData({ company_name: '', contact_name: '', email: '', phone: '', country: '', address: '' })
 
     // Load user profile for defaults
     try {
@@ -512,6 +515,7 @@ export default function QuotePage() {
       let customerId = selectedCustomer?.id
       let customerName = selectedCustomer?.company_name || ''
       let customerContact = selectedCustomer?.contact_name || ''
+      let customerAddress = selectedCustomer?.address || ''
 
       // Create new customer if needed
       if (isNewCustomer) {
@@ -525,6 +529,7 @@ export default function QuotePage() {
         customerId = data.id
         customerName = data.company_name
         customerContact = data.contact_name || ''
+        customerAddress = data.address || ''
       }
 
       // Change 6: Compute totals from all PDF product rows
@@ -602,6 +607,7 @@ export default function QuotePage() {
         logoUrl: userProfile?.logo_url,
         clientName: customerName,
         clientContact: customerContact || undefined,
+        clientAddress: customerAddress || undefined,
         quotationNumber: savedQuote.quotation_number,
         date: today,
         validityDays: quoteDetails.validityDays,
@@ -640,6 +646,79 @@ export default function QuotePage() {
       toast.error(error.message || '生成失败，请重试')
     } finally {
       setGenerating(false)
+    }
+  }
+
+  // ── PDF Preview (no DB save) ─────────────────────────────────────
+  const handlePreviewPDF = async () => {
+    if (!selectedCustomer && !isNewCustomer) {
+      toast.error('请先选择客户')
+      return
+    }
+    if (!selectedTradeResult) {
+      toast.error('请先填写成本信息并计算报价')
+      return
+    }
+    if (pdfProducts.length === 0 || pdfProducts.some(p => !p.name.trim())) {
+      toast.error('请填写所有产品名称')
+      return
+    }
+
+    setPreviewing(true)
+    try {
+      const { pdf } = await import('@react-pdf/renderer')
+      const { QuotationPDF } = await import('@/components/pdf/QuotationPDF')
+
+      const customerName = selectedCustomer?.company_name || newCustomerData.company_name
+      const customerContact = selectedCustomer?.contact_name || newCustomerData.contact_name || ''
+      const customerAddress = selectedCustomer?.address || newCustomerData.address || ''
+      const totalForeign = pdfProducts.reduce((s, p) => s + p.amount_foreign, 0)
+      const today = new Date().toLocaleDateString('en-US', {
+        year: 'numeric', month: 'long', day: 'numeric',
+      })
+
+      const element = React.createElement(QuotationPDF, {
+        companyName: userProfile?.company_name || 'Your Company',
+        companyNameCn: userProfile?.company_name_cn,
+        address: userProfile?.address,
+        phone: userProfile?.phone,
+        email: userProfile?.email,
+        website: userProfile?.website,
+        logoUrl: userProfile?.logo_url,
+        clientName: customerName,
+        clientContact: customerContact || undefined,
+        clientAddress: customerAddress || undefined,
+        quotationNumber: 'PREVIEW',
+        date: today,
+        validityDays: quoteDetails.validityDays,
+        tradeTerm: quoteDetails.tradeTerm,
+        currency: formData.currency,
+        products: pdfProducts.map(p => ({
+          name: p.name,
+          model: p.model || undefined,
+          specs: p.specs || undefined,
+          qty: p.qty,
+          unit: p.unit,
+          unit_price_foreign: p.unit_price_foreign,
+          amount_foreign: p.amount_foreign,
+        })),
+        totalAmount: totalForeign,
+        paymentTerms: quoteDetails.paymentTerms,
+        deliveryTime: quoteDetails.deliveryTime,
+        packing: quoteDetails.packing || undefined,
+        remarks: quoteDetails.remarks || undefined,
+        type: quoteDetails.type,
+      })
+
+      const blob = await pdf(element).toBlob()
+      const url = URL.createObjectURL(blob)
+      window.open(url, '_blank')
+      // Clean up after a short delay to allow browser to load the URL
+      setTimeout(() => URL.revokeObjectURL(url), 5000)
+    } catch (error: any) {
+      toast.error(error.message || '预览失败，请重试')
+    } finally {
+      setPreviewing(false)
     }
   }
 
@@ -1126,6 +1205,17 @@ export default function QuotePage() {
                         />
                       </div>
                     </div>
+                    <div>
+                      <label className="text-sm font-medium">地址</label>
+                      <Input
+                        className="mt-1"
+                        value={newCustomerData.address}
+                        onChange={(e) =>
+                          setNewCustomerData({ ...newCustomerData, address: e.target.value })
+                        }
+                        placeholder="公司地址（可选）"
+                      />
+                    </div>
                   </div>
                 </>
               )}
@@ -1401,23 +1491,33 @@ export default function QuotePage() {
                 />
               </div>
 
-              <Button
-                className="w-full"
-                onClick={handleGeneratePDF}
-                disabled={generating}
-              >
-                {generating ? (
-                  <>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={handlePreviewPDF}
+                  disabled={previewing || generating}
+                >
+                  {previewing ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    生成中...
-                  </>
-                ) : (
-                  <>
+                  ) : (
                     <FileText className="mr-2 h-4 w-4" />
-                    生成并下载 PDF
-                  </>
-                )}
-              </Button>
+                  )}
+                  预览
+                </Button>
+                <Button
+                  className="flex-1"
+                  onClick={handleGeneratePDF}
+                  disabled={generating || previewing}
+                >
+                  {generating ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileText className="mr-2 h-4 w-4" />
+                  )}
+                  保存并下载
+                </Button>
+              </div>
             </div>
           )}
         </DialogContent>

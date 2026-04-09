@@ -33,6 +33,7 @@ interface Customer {
   email: string | null
   phone: string | null
   country: string | null
+  address: string | null
   status: string
   notes: string | null
   created_at: string
@@ -64,6 +65,7 @@ export default function CustomersPage() {
     email: '',
     phone: '',
     country: '',
+    address: '',
     status: 'new',
     notes: '',
   })
@@ -108,6 +110,7 @@ export default function CustomersPage() {
         email: customer.email || '',
         phone: customer.phone || '',
         country: customer.country || '',
+        address: customer.address || '',
         status: customer.status,
         notes: customer.notes || '',
       })
@@ -119,6 +122,7 @@ export default function CustomersPage() {
         email: '',
         phone: '',
         country: '',
+        address: '',
         status: 'new',
         notes: '',
       })
@@ -267,6 +271,16 @@ export default function CustomersPage() {
                     placeholder="电话/WhatsApp"
                   />
                 </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">地址</label>
+                <Input
+                  value={formData.address}
+                  onChange={(e) =>
+                    setFormData({ ...formData, address: e.target.value })
+                  }
+                  placeholder="公司地址"
+                />
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">状态</label>
