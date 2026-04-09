@@ -1,24 +1,17 @@
-import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+import { getAuthUser, createAdminClient } from '@/lib/supabase/api-auth'
 
 export async function GET(
-  request: Request,
+  _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const user = await getAuthUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
     const { id } = await params
-    const { data: { user } } = await supabase.auth.getUser()
+    const supabase = createAdminClient()
 
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    // Get customer
     const { data: customer, error } = await supabase
       .from('customers')
       .select('*')
@@ -26,11 +19,8 @@ export async function GET(
       .eq('user_id', user.id)
       .single()
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-    // Get quotations for this customer
     const { data: quotations } = await supabase
       .from('quotations')
       .select('*')
@@ -39,7 +29,6 @@ export async function GET(
       .order('created_at', { ascending: false })
       .limit(20)
 
-    // Get remarks for this customer
     const { data: remarks } = await supabase
       .from('customer_remarks')
       .select('*')
@@ -62,13 +51,11 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const user = await getAuthUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
     const { id } = await params
-    const { data: { user } } = await supabase.auth.getUser()
-
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
+    const supabase = createAdminClient()
     const body = await request.json()
     const { company_name, contact_name, email, phone, country, status, notes } = body
 
@@ -89,9 +76,7 @@ export async function PUT(
       .select()
       .single()
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
     return NextResponse.json(data)
   } catch (error: any) {
@@ -100,16 +85,15 @@ export async function PUT(
 }
 
 export async function DELETE(
-  request: Request,
+  _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getAuthUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const { id } = await params
+    const supabase = createAdminClient()
 
     const { error } = await supabase
       .from('customers')
@@ -117,51 +101,9 @@ export async function DELETE(
       .eq('id', id)
       .eq('user_id', user.id)
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
     return NextResponse.json({ success: true })
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-}
-
-// Add remark to customer
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await params
-    const { data: { user } } = await supabase.auth.getUser()
-
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    const body = await request.json()
-    const { content } = body
-
-    if (!content) {
-      return NextResponse.json({ error: '备注内容不能为空' }, { status: 400 })
-    }
-
-    const { data, error } = await supabase
-      .from('customer_remarks')
-      .insert({
-        customer_id: id,
-        user_id: user.id,
-        content,
-      })
-      .select()
-      .single()
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
-
-    return NextResponse.json(data)
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }

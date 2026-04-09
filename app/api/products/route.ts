@@ -1,19 +1,12 @@
-import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+import { getAuthUser, createAdminClient } from '@/lib/supabase/api-auth'
 
 export async function GET(request: Request) {
   try {
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getAuthUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
+    const supabase = createAdminClient()
     const { searchParams } = new URL(request.url)
     const search = searchParams.get('search') || ''
     const category = searchParams.get('category') || ''
@@ -35,12 +28,8 @@ export async function GET(request: Request) {
     }
 
     const { data, error, count } = await query
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
-
-    // Get all categories for filter
     const { data: categories } = await supabase
       .from('products')
       .select('category')
@@ -63,12 +52,10 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getAuthUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
+    const supabase = createAdminClient()
     const body = await request.json()
     const { name, model, cost_price, unit, specs, image_url, category } = body
 
@@ -91,9 +78,7 @@ export async function POST(request: Request) {
       .select()
       .single()
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
     return NextResponse.json(data)
   } catch (error: any) {

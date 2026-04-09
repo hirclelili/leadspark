@@ -38,6 +38,7 @@ interface Quotation {
   currency: string
   total_amount_foreign: number
   created_at: string
+  products?: Array<{ name: string; qty: number; unit: string }>
 }
 
 interface Remark {
@@ -373,29 +374,53 @@ export default function CustomerDetailPage() {
             <CardTitle className="flex items-center gap-2">
               <FileText className="w-5 h-5" />
               报价记录
+              <span className="text-sm font-normal text-gray-400 ml-1">
+                ({quotations.length})
+              </span>
             </CardTitle>
           </CardHeader>
           <CardContent>
             {quotations.length === 0 ? (
-              <p className="text-sm text-gray-500 text-center py-4">
-                暂无报价记录
-              </p>
+              <div className="text-center py-6">
+                <p className="text-sm text-gray-500 mb-3">暂无报价记录</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => router.push('/quote')}
+                >
+                  去报价
+                </Button>
+              </div>
             ) : (
               <div className="space-y-3">
                 {quotations.map((q) => (
                   <div
                     key={q.id}
-                    className="p-3 border rounded-lg cursor-pointer hover:bg-gray-50"
+                    className="p-3 border rounded-lg cursor-pointer hover:bg-blue-50 hover:border-blue-200 transition-colors group"
                     onClick={() => router.push(`/quote/history/${q.id}`)}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-medium">{q.quotation_number}</span>
-                      <span className="text-sm text-gray-500">
+                      <span className="font-mono font-medium text-sm group-hover:text-blue-700">
+                        {q.quotation_number}
+                      </span>
+                      <span className="text-xs text-gray-400">
                         {formatDate(q.created_at)}
                       </span>
                     </div>
-                    <div className="text-sm text-gray-600 mt-1">
-                      {q.trade_term} · {formatPrice(q.total_amount_foreign, q.currency)}
+                    <div className="text-sm text-gray-600 mt-1 flex items-center justify-between">
+                      <span>
+                        {q.trade_term}
+                        {q.products && q.products.length > 0 && (
+                          <span className="text-gray-400 ml-2">
+                            · {q.products[0].name}
+                            {q.products[0].qty && ` ×${q.products[0].qty}`}
+                            {q.products.length > 1 && ` 等${q.products.length}项`}
+                          </span>
+                        )}
+                      </span>
+                      <span className="font-medium text-blue-700">
+                        {formatPrice(q.total_amount_foreign, q.currency)}
+                      </span>
                     </div>
                   </div>
                 ))}

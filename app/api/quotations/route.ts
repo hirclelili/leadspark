@@ -1,31 +1,21 @@
-import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
+import { getAuthUser, createAdminClient } from '@/lib/supabase/api-auth'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
-
-// Generate quotation number
 function generateQuotationNumber(): string {
   const date = new Date()
   const y = date.getFullYear()
   const m = String(date.getMonth() + 1).padStart(2, '0')
   const d = String(date.getDate()).padStart(2, '0')
-  const random = Math.floor(Math.random() * 1000)
-    .toString()
-    .padStart(3, '0')
+  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0')
   return `LS-${y}${m}${d}-${random}`
 }
 
 export async function GET(request: Request) {
   try {
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getAuthUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
+    const supabase = createAdminClient()
     const { searchParams } = new URL(request.url)
     const page = parseInt(searchParams.get('page') || '1')
     const limit = parseInt(searchParams.get('limit') || '10')
@@ -37,16 +27,9 @@ export async function GET(request: Request) {
       .order('created_at', { ascending: false })
       .range((page - 1) * limit, page * limit - 1)
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-    return NextResponse.json({
-      quotations: data || [],
-      total: count || 0,
-      page,
-      limit,
-    })
+    return NextResponse.json({ quotations: data || [], total: count || 0, page, limit })
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
@@ -54,12 +37,10 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getAuthUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
+    const supabase = createAdminClient()
     const body = await request.json()
     const {
       customer_id,
@@ -78,10 +59,7 @@ export async function POST(request: Request) {
     } = body
 
     if (!customer_id || !trade_term || !products || products.length === 0) {
-      return NextResponse.json(
-        { error: '客户、贸易术语和产品为必填' },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: '客户、贸易术语和产品为必填' }, { status: 400 })
     }
 
     const quotation_number = generateQuotationNumber()
@@ -108,9 +86,7 @@ export async function POST(request: Request) {
       .select()
       .single()
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
     return NextResponse.json(data)
   } catch (error: any) {

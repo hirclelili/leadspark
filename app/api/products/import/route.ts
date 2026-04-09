@@ -1,13 +1,8 @@
-import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import * as XLSX from 'xlsx'
+import { getAuthUser, createAdminClient } from '@/lib/supabase/api-auth'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
-
-// Preview Excel file
+// Preview Excel file (no auth needed – just parsing)
 export async function POST(request: Request) {
   try {
     const formData = await request.formData()
@@ -26,7 +21,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: '仅支持 .xlsx 和 .csv 文件' }, { status: 400 })
     }
 
-    // Read file
     const buffer = await file.arrayBuffer()
     const workbook = XLSX.read(buffer, { type: 'array' })
     const sheetName = workbook.SheetNames[0]
@@ -37,7 +31,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: '文件为空' }, { status: 400 })
     }
 
-    // Validate and parse data
     const products = []
     const errors = []
 
@@ -60,18 +53,11 @@ export async function POST(request: Request) {
         continue
       }
 
-      products.push({
-        name,
-        model,
-        cost_price,
-        unit,
-        specs,
-        category,
-      })
+      products.push({ name, model, cost_price, unit, specs, category })
     }
 
     return NextResponse.json({
-      products: products.slice(0, 100), // Limit preview to 100
+      products: products.slice(0, 100),
       total: products.length,
       errors,
     })
@@ -80,15 +66,13 @@ export async function POST(request: Request) {
   }
 }
 
-// Import products with confirmation
+// Confirm import – write to DB
 export async function PUT(request: Request) {
   try {
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getAuthUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
+    const supabase = createAdminClient()
     const body = await request.json()
     const { products } = body
 
@@ -96,25 +80,19 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: '没有数据' }, { status: 400 })
     }
 
-    // Add user_id to all products
     const productsWithUser = products.map((p: any) => ({
       ...p,
       user_id: user.id,
     }))
 
-    // Insert all products
     const { data: inserted, error } = await supabase
       .from('products')
       .insert(productsWithUser)
       .select()
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-    return NextResponse.json({
-      inserted: inserted?.length || 0,
-    })
+    return NextResponse.json({ inserted: inserted?.length || 0 })
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
