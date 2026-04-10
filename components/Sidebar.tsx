@@ -14,6 +14,7 @@ import {
   X,
   LogOut,
   Sparkles,
+  Bot,
 } from 'lucide-react'
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -26,6 +27,7 @@ const navItems = [
   { href: '/quote/history', label: '报价历史', icon: FileText },
   { href: '/products', label: '产品库', icon: Package },
   { href: '/customers', label: '客户管理', icon: Users },
+  { href: '/ai', label: 'AI 助手', icon: Bot },
   { href: '/settings', label: '设置', icon: Settings },
 ]
 
