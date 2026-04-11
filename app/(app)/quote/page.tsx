@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useMemo } from 'react'
-import { Calculator, ChevronDown, Loader2, RefreshCw, FileText, Search, ArrowLeft } from 'lucide-react'
+import { Calculator, ChevronDown, ChevronUp, Loader2, RefreshCw, FileText, Search, ArrowLeft, Plus, X, Package } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -20,7 +20,6 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 
 const TRADE_TERMS = [
@@ -53,7 +52,9 @@ const PAYMENT_TERMS_OPTIONS = [
   'Western Union',
 ]
 
-interface Product {
+// ── Interfaces ───────────────────────────────────────────────────────────────
+
+interface LibraryProduct {
   id: string
   name: string
   model: string | null
@@ -66,6 +67,31 @@ interface QuoteResult {
   term: string
   priceForeign: number
   priceCNY: number
+}
+
+// One row in the calculator's product input table
+interface CalcProductRow {
+  id: string
+  name: string
+  model: string
+  unit: string
+  costPrice: string  // CNY per unit, string for input
+  quantity: string   // quantity, string for input
+}
+
+interface MultiProductQuoteResult {
+  byProduct: { productId: string; results: QuoteResult[] }[]
+  orderTotals: QuoteResult[]  // sum across all products per Incoterm
+}
+
+interface PDFProductRow {
+  name: string
+  model: string
+  specs: string
+  qty: number
+  unit: string
+  unit_price_foreign: number
+  amount_foreign: number
 }
 
 interface Customer {
@@ -90,16 +116,7 @@ interface UserProfile {
   default_validity?: number
 }
 
-// Change 2: PDFProductRow interface
-interface PDFProductRow {
-  name: string
-  model: string
-  specs: string
-  qty: number
-  unit: string
-  unit_price_foreign: number
-  amount_foreign: number
-}
+// ── Pure calculation functions ────────────────────────────────────────────────
 
 function calculateQuote(
   costPrice: number,
@@ -119,7 +136,6 @@ function calculateQuote(
 
   return TRADE_TERMS.map((term) => {
     let priceCNY = 0
-
     switch (term.code) {
       case 'EXW':
         priceCNY = unitCost * profitFactor
@@ -145,8 +161,7 @@ function calculateQuote(
         break
       case 'DAP':
         priceCNY =
-          (unitCost + unitDomestic + unitFreight + unitDestination * 0.7) *
-          profitFactor
+          (unitCost + unitDomestic + unitFreight + unitDestination * 0.7) * profitFactor
         break
       case 'DPU':
         priceCNY =
@@ -154,24 +169,57 @@ function calculateQuote(
         break
       case 'DDP':
         priceCNY =
-          (unitCost + unitDomestic + unitFreight + unitDestination * 1.15) *
-          profitFactor
+          (unitCost + unitDomestic + unitFreight + unitDestination * 1.15) * profitFactor
         break
     }
-
-    return {
-      term: term.code,
-      priceForeign: priceCNY * exchangeRate,
-      priceCNY,
-    }
+    return { term: term.code, priceForeign: priceCNY * exchangeRate, priceCNY }
   })
 }
 
-function calculateDiscount(
-  lclFreight: number,
-  fclFreight: number,
-  lclQty: number
-): number {
+// Allocates shared costs proportionally by quantity across multiple products
+function calculateMultiProductQuote(
+  products: { id: string; costPrice: number; quantity: number }[],
+  domesticCost: number,
+  freight: number,
+  destinationCost: number,
+  insuranceRate: number,
+  profitRate: number,
+  exchangeRate: number
+): MultiProductQuoteResult {
+  const totalQty = products.reduce((s, p) => s + p.quantity, 0)
+  if (totalQty === 0) return { byProduct: [], orderTotals: [] }
+
+  const byProduct = products.map((p) => {
+    const share = p.quantity / totalQty
+    const results = calculateQuote(
+      p.costPrice * p.quantity,
+      p.quantity,
+      domesticCost * share,
+      freight * share,
+      destinationCost * share,
+      insuranceRate,
+      profitRate,
+      exchangeRate
+    )
+    return { productId: p.id, results }
+  })
+
+  const orderTotals = TRADE_TERMS.map(({ code }) => {
+    let totalForeign = 0
+    let totalCNY = 0
+    for (const { productId, results } of byProduct) {
+      const r = results.find((r) => r.term === code)!
+      const p = products.find((p) => p.id === productId)!
+      totalForeign += r.priceForeign * p.quantity
+      totalCNY += r.priceCNY * p.quantity
+    }
+    return { term: code, priceForeign: totalForeign, priceCNY: totalCNY }
+  })
+
+  return { byProduct, orderTotals }
+}
+
+function calculateDiscount(lclFreight: number, fclFreight: number, lclQty: number): number {
   if (lclFreight <= 0) return 0
   const lclPrice = (lclFreight / lclQty) * 1.1
   const fclPrice = (fclFreight / lclQty) * 1.1
@@ -179,20 +227,21 @@ function calculateDiscount(
   return ((lclPrice - fclPrice) / lclPrice) * 100
 }
 
+// ── Component ─────────────────────────────────────────────────────────────────
+
 export default function QuotePage() {
-  // ── Existing state ──────────────────────────────────────────────
-  const [products, setProducts] = useState<Product[]>([])
+  // ── Library products + exchange rate
+  const [libraryProducts, setLibraryProducts] = useState<LibraryProduct[]>([])
   const [exchangeRate, setExchangeRate] = useState(0.14)
   const [rateLoading, setRateLoading] = useState(false)
   const [rateUpdatedAt, setRateUpdatedAt] = useState('')
 
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
-  // Change 1: manual product name when no library product selected
-  const [productName, setProductName] = useState('') // manual product name input
-  const [productDialogOpen, setProductDialogOpen] = useState(false)
+  // ── Calculator inputs
+  const [calcProducts, setCalcProducts] = useState<CalcProductRow[]>([
+    { id: crypto.randomUUID(), name: '', model: '', unit: 'pc', costPrice: '', quantity: '100' },
+  ])
+  const [productPickerRowId, setProductPickerRowId] = useState<string | null>(null)
   const [formData, setFormData] = useState({
-    productCost: '',
-    quantity: '100',
     domesticCost: '0',
     freight: '0',
     destinationCost: '0',
@@ -200,12 +249,12 @@ export default function QuotePage() {
     profitRate: '10',
     currency: 'USD',
   })
-
   const [showLCLFCL, setShowLCLFCL] = useState(false)
   const [lclData, setLclData] = useState({ quantity: '500', freight: '800' })
   const [fclData, setFclData] = useState({ quantity: '2000', freight: '1500' })
+  const [showDetail, setShowDetail] = useState(false)
 
-  // ── Quote dialog state ──────────────────────────────────────────
+  // ── Quote dialog state
   const [quoteDialogOpen, setQuoteDialogOpen] = useState(false)
   const [quoteStep, setQuoteStep] = useState<1 | 2>(1)
   const [customerQuery, setCustomerQuery] = useState('')
@@ -214,18 +263,10 @@ export default function QuotePage() {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
   const [isNewCustomer, setIsNewCustomer] = useState(false)
   const [newCustomerData, setNewCustomerData] = useState({
-    company_name: '',
-    contact_name: '',
-    email: '',
-    phone: '',
-    country: '',
-    address: '',
+    company_name: '', contact_name: '', email: '', phone: '', country: '', address: '',
   })
   const [lastQuote, setLastQuote] = useState<{
-    date: string
-    trade_term: string
-    currency: string
-    total_amount_foreign: number
+    date: string; trade_term: string; currency: string; total_amount_foreign: number
   } | null>(null)
   const [quoteDetails, setQuoteDetails] = useState({
     tradeTerm: 'FOB',
@@ -239,23 +280,30 @@ export default function QuotePage() {
   const [generating, setGenerating] = useState(false)
   const [previewing, setPreviewing] = useState(false)
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
-  // Change 2: pdfProducts state for multi-product support
   const [pdfProducts, setPdfProducts] = useState<PDFProductRow[]>([])
 
-  // ── Computed values ─────────────────────────────────────────────
-  const results = useMemo(() => {
-    const cost = parseFloat(formData.productCost) || 0
-    const qty = parseFloat(formData.quantity) || 1
-    const domestic = parseFloat(formData.domesticCost) || 0
-    const freight = parseFloat(formData.freight) || 0
-    const dest = parseFloat(formData.destinationCost) || 0
-    const ins = parseFloat(formData.insuranceRate) || 0.3
-    const profit = parseFloat(formData.profitRate) || 10
+  // ── Computed values
+  const multiResults = useMemo(() => {
+    const valid = calcProducts
+      .map((p) => ({
+        id: p.id,
+        costPrice: parseFloat(p.costPrice) || 0,
+        quantity: parseFloat(p.quantity) || 0,
+      }))
+      .filter((p) => p.costPrice > 0 && p.quantity > 0)
 
-    if (cost <= 0 || qty <= 0) return []
+    if (valid.length === 0) return null
 
-    return calculateQuote(cost, qty, domestic, freight, dest, ins, profit, exchangeRate)
-  }, [formData, exchangeRate])
+    return calculateMultiProductQuote(
+      valid,
+      parseFloat(formData.domesticCost) || 0,
+      parseFloat(formData.freight) || 0,
+      parseFloat(formData.destinationCost) || 0,
+      parseFloat(formData.insuranceRate) || 0.3,
+      parseFloat(formData.profitRate) || 10,
+      exchangeRate
+    )
+  }, [calcProducts, formData, exchangeRate])
 
   const discount = useMemo(() => {
     if (!showLCLFCL) return 0
@@ -267,88 +315,66 @@ export default function QuotePage() {
   }, [showLCLFCL, lclData, fclData])
 
   const selectedTradeResult = useMemo(
-    () => results.find((r) => r.term === quoteDetails.tradeTerm) || null,
-    [results, quoteDetails.tradeTerm]
+    () => multiResults?.orderTotals.find((r) => r.term === quoteDetails.tradeTerm) || null,
+    [multiResults, quoteDetails.tradeTerm]
   )
 
-  // ── Effects ─────────────────────────────────────────────────────
+  // ── Effects
   useEffect(() => {
-    fetchProducts()
+    fetchLibraryProducts()
     fetchExchangeRate()
   }, [])
 
   // Search customers with debounce
   useEffect(() => {
-    if (!customerQuery.trim()) {
-      setCustomerResults([])
-      return
-    }
+    if (!customerQuery.trim()) { setCustomerResults([]); return }
     const timer = setTimeout(async () => {
       setCustomerLoading(true)
       try {
-        const res = await fetch(
-          `/api/customers?search=${encodeURIComponent(customerQuery)}&limit=8`
-        )
+        const res = await fetch(`/api/customers?search=${encodeURIComponent(customerQuery)}&limit=8`)
         const data = await res.json()
         setCustomerResults(data.customers || [])
-      } catch {
-        // ignore
-      } finally {
-        setCustomerLoading(false)
-      }
+      } catch { /* ignore */ } finally { setCustomerLoading(false) }
     }, 300)
     return () => clearTimeout(timer)
   }, [customerQuery])
 
   // Auto-add ocean freight remark for CIF/CFR terms
   useEffect(() => {
-    const oceanNote =
-      'Ocean freight is subject to actual rate at time of shipment.'
+    const oceanNote = 'Ocean freight is subject to actual rate at time of shipment.'
     const isCIF = ['CIF', 'CIP', 'CFR', 'CPT'].includes(quoteDetails.tradeTerm)
     setQuoteDetails((prev) => {
       const hasNote = prev.remarks.includes(oceanNote)
-      if (isCIF && !hasNote) {
-        return {
-          ...prev,
-          remarks: prev.remarks ? `${prev.remarks}\n${oceanNote}` : oceanNote,
-        }
-      }
-      if (!isCIF && hasNote) {
-        return {
-          ...prev,
-          remarks: prev.remarks
-            .replace(`\n${oceanNote}`, '')
-            .replace(oceanNote, '')
-            .trim(),
-        }
-      }
+      if (isCIF && !hasNote) return { ...prev, remarks: prev.remarks ? `${prev.remarks}\n${oceanNote}` : oceanNote }
+      if (!isCIF && hasNote) return { ...prev, remarks: prev.remarks.replace(`\n${oceanNote}`, '').replace(oceanNote, '').trim() }
       return prev
     })
   }, [quoteDetails.tradeTerm])
 
-  // Change 8: Sync first row's price when trade term changes
+  // Sync pdfProducts prices when trade term or multiResults changes
   useEffect(() => {
-    if (!selectedTradeResult || pdfProducts.length === 0) return
-    setPdfProducts(prev => {
-      const updated = [...prev]
-      updated[0] = {
-        ...updated[0],
-        unit_price_foreign: selectedTradeResult.priceForeign,
-        amount_foreign: selectedTradeResult.priceForeign * updated[0].qty,
-      }
-      return updated
-    })
-  }, [selectedTradeResult])
+    if (!multiResults || !quoteDialogOpen) return
+    const validCalc = calcProducts.filter((p) => parseFloat(p.costPrice) > 0 && parseFloat(p.quantity) > 0)
+    setPdfProducts((prev) =>
+      prev.map((row, idx) => {
+        const calc = validCalc[idx]
+        if (!calc) return row
+        const bp = multiResults.byProduct.find((b) => b.productId === calc.id)
+        const tr = bp?.results.find((r) => r.term === quoteDetails.tradeTerm)
+        if (!tr) return row
+        const qty = parseFloat(calc.quantity) || 1
+        return { ...row, unit_price_foreign: tr.priceForeign, amount_foreign: tr.priceForeign * qty }
+      })
+    )
+  }, [multiResults, quoteDetails.tradeTerm, quoteDialogOpen])
 
-  // ── Existing functions ──────────────────────────────────────────
-  const fetchProducts = async () => {
+  // ── Functions
+  const fetchLibraryProducts = async () => {
     try {
       const res = await fetch('/api/products?limit=100')
       const data = await res.json()
-      setProducts(data.products || [])
-    } catch (error) {
-      console.error('Error:', error)
-    }
+      setLibraryProducts(data.products || [])
+    } catch { /* ignore */ }
   }
 
   const fetchExchangeRate = async () => {
@@ -362,19 +388,7 @@ export default function QuotePage() {
       const data = await res.json()
       setExchangeRate(data.rate || 0.14)
       setRateUpdatedAt(data.updatedAt || '')
-    } catch (error) {
-      console.error('Error:', error)
-    } finally {
-      setRateLoading(false)
-    }
-  }
-
-  // Change 4: clear productName when selecting from library
-  const handleProductSelect = (product: Product) => {
-    setSelectedProduct(product)
-    setProductName('')
-    setFormData({ ...formData, productCost: String(product.cost_price) })
-    setProductDialogOpen(false)
+    } catch { /* ignore */ } finally { setRateLoading(false) }
   }
 
   const handleCurrencyChange = async (currency: string) => {
@@ -389,20 +403,39 @@ export default function QuotePage() {
       const data = await res.json()
       setExchangeRate(data.rate || 0.14)
       setRateUpdatedAt(data.updatedAt || '')
-    } catch (error) {
-      console.error('Error:', error)
-    } finally {
-      setRateLoading(false)
-    }
+    } catch { /* ignore */ } finally { setRateLoading(false) }
+  }
+
+  const addCalcProduct = () => {
+    setCalcProducts((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), name: '', model: '', unit: 'pc', costPrice: '', quantity: '100' },
+    ])
+  }
+
+  const removeCalcProduct = (id: string) => {
+    setCalcProducts((prev) => prev.filter((p) => p.id !== id))
+  }
+
+  const updateCalcProduct = (id: string, field: keyof CalcProductRow, value: string) => {
+    setCalcProducts((prev) => prev.map((p) => p.id === id ? { ...p, [field]: value } : p))
+  }
+
+  const handleLibraryProductSelect = (product: LibraryProduct) => {
+    if (!productPickerRowId) return
+    setCalcProducts((prev) =>
+      prev.map((row) =>
+        row.id === productPickerRowId
+          ? { ...row, name: product.name, model: product.model || '', costPrice: String(product.cost_price), unit: product.unit || 'pc' }
+          : row
+      )
+    )
+    setProductPickerRowId(null)
   }
 
   const formatTime = (isoString: string) => {
     if (!isoString) return ''
-    return new Date(isoString).toLocaleTimeString('zh-CN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    })
+    return new Date(isoString).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   }
 
   const formatPrice = (price: number) => {
@@ -416,10 +449,7 @@ export default function QuotePage() {
     return symbols[currency] || '$'
   }
 
-  // ── Quote dialog functions ──────────────────────────────────────
-  // Change 5: initialize pdfProducts with one row from the calculator
   const openQuoteDialog = async () => {
-    // Reset dialog state
     setQuoteStep(1)
     setSelectedCustomer(null)
     setIsNewCustomer(false)
@@ -428,7 +458,6 @@ export default function QuotePage() {
     setLastQuote(null)
     setNewCustomerData({ company_name: '', contact_name: '', email: '', phone: '', country: '', address: '' })
 
-    // Load user profile for defaults
     try {
       const res = await fetch('/api/user-profile')
       const profile = await res.json()
@@ -440,26 +469,20 @@ export default function QuotePage() {
           validityDays: profile.default_validity || prev.validityDays,
         }))
       }
-    } catch {
-      // continue with defaults
-    }
+    } catch { /* use defaults */ }
 
-    // Initialize PDF products with the main calculator row
-    const qty = parseFloat(formData.quantity) || 1
-    const name = selectedProduct?.name || productName || '产品'
-    const model = selectedProduct?.model || ''
-    const specs = selectedProduct?.specs || ''
-    const unit = selectedProduct?.unit || 'pc'
-    // We'll update prices when the user picks the trade term in step 2
-    setPdfProducts([{
-      name,
-      model,
-      specs,
-      qty,
-      unit,
-      unit_price_foreign: 0, // will be set when trade term is selected
+    // Initialize pdfProducts from calcProducts
+    const validCalc = calcProducts.filter((p) => parseFloat(p.costPrice) > 0 && parseFloat(p.quantity) > 0)
+    const rows: PDFProductRow[] = validCalc.map((p) => ({
+      name: p.name || '产品',
+      model: p.model,
+      specs: '',
+      qty: parseFloat(p.quantity) || 1,
+      unit: p.unit || 'pc',
+      unit_price_foreign: 0, // filled by trade-term sync effect
       amount_foreign: 0,
-    }])
+    }))
+    setPdfProducts(rows.length > 0 ? rows : [{ name: '', model: '', specs: '', qty: 1, unit: 'pc', unit_price_foreign: 0, amount_foreign: 0 }])
 
     setQuoteDialogOpen(true)
   }
@@ -469,46 +492,23 @@ export default function QuotePage() {
     setIsNewCustomer(false)
     setCustomerQuery(customer.company_name)
     setCustomerResults([])
-
-    // Fetch last quotation for this customer
     try {
       const res = await fetch(`/api/customers/${customer.id}`)
       const data = await res.json()
       if (data.quotations?.length > 0) {
         const q = data.quotations[0]
-        setLastQuote({
-          date: q.created_at,
-          trade_term: q.trade_term,
-          currency: q.currency,
-          total_amount_foreign: q.total_amount_foreign,
-        })
+        setLastQuote({ date: q.created_at, trade_term: q.trade_term, currency: q.currency, total_amount_foreign: q.total_amount_foreign })
       } else {
         setLastQuote(null)
       }
-    } catch {
-      setLastQuote(null)
-    }
+    } catch { setLastQuote(null) }
   }
 
-  // Change 6 & 9: updated handleGeneratePDF
   const handleGeneratePDF = async () => {
-    if (!selectedCustomer && !isNewCustomer) {
-      toast.error('请选择或新建客户')
-      return
-    }
-    if (isNewCustomer && !newCustomerData.company_name.trim()) {
-      toast.error('请填写客户公司名称')
-      return
-    }
-    if (!selectedTradeResult) {
-      toast.error('请先填写成本信息并计算报价')
-      return
-    }
-    // Change 9: validate pdfProducts have names
-    if (pdfProducts.length === 0 || pdfProducts.some(p => !p.name.trim())) {
-      toast.error('请填写所有产品名称')
-      return
-    }
+    if (!selectedCustomer && !isNewCustomer) { toast.error('请选择或新建客户'); return }
+    if (isNewCustomer && !newCustomerData.company_name.trim()) { toast.error('请填写客户公司名称'); return }
+    if (!selectedTradeResult) { toast.error('请先填写成本信息并计算报价'); return }
+    if (pdfProducts.length === 0 || pdfProducts.some((p) => !p.name.trim())) { toast.error('请填写所有产品名称'); return }
 
     setGenerating(true)
     try {
@@ -517,13 +517,8 @@ export default function QuotePage() {
       let customerContact = selectedCustomer?.contact_name || ''
       let customerAddress = selectedCustomer?.address || ''
 
-      // Create new customer if needed
       if (isNewCustomer) {
-        const res = await fetch('/api/customers', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newCustomerData),
-        })
+        const res = await fetch('/api/customers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newCustomerData) })
         const data = await res.json()
         if (!res.ok) throw new Error(data.error || '创建客户失败')
         customerId = data.id
@@ -532,23 +527,20 @@ export default function QuotePage() {
         customerAddress = data.address || ''
       }
 
-      // Change 6: Compute totals from all PDF product rows
       const totalForeign = pdfProducts.reduce((s, p) => s + p.amount_foreign, 0)
       const totalCNY = totalForeign / exchangeRate
-      const amountForeign = totalForeign
-      const amountCNY = totalCNY
 
-      const productsForDB = pdfProducts.map(p => ({
+      const validCalc = calcProducts.filter((p) => parseFloat(p.costPrice) > 0)
+      const productsForDB = pdfProducts.map((p, idx) => ({
         name: p.name,
         model: p.model || undefined,
         qty: p.qty,
         unit: p.unit,
-        cost_price: parseFloat(formData.productCost) || 0,
+        cost_price: parseFloat(validCalc[idx]?.costPrice || '0'),
         unit_price_foreign: p.unit_price_foreign,
         amount_foreign: p.amount_foreign,
       }))
 
-      // Save quotation to DB first to get the auto-generated number
       const saveRes = await fetch('/api/quotations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -565,8 +557,8 @@ export default function QuotePage() {
             insurance_rate: parseFloat(formData.insuranceRate) || 0.3,
             profit_rate: parseFloat(formData.profitRate) || 10,
           },
-          total_amount_foreign: amountForeign,
-          total_amount_cny: amountCNY,
+          total_amount_foreign: totalForeign,
+          total_amount_cny: totalCNY,
           payment_terms: quoteDetails.paymentTerms,
           delivery_time: quoteDetails.deliveryTime,
           validity_days: quoteDetails.validityDays,
@@ -578,25 +570,17 @@ export default function QuotePage() {
       const savedQuote = await saveRes.json()
       if (!saveRes.ok) throw new Error(savedQuote.error || '保存报价失败')
 
-      // Update existing customer status to 'quoted'
       if (selectedCustomer) {
         await fetch(`/api/customers/${customerId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...selectedCustomer, status: 'quoted' }),
         })
       }
 
-      // Dynamically import PDF libs to avoid SSR issues
       const { pdf } = await import('@react-pdf/renderer')
       const { QuotationPDF } = await import('@/components/pdf/QuotationPDF')
 
-      const today = new Date().toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-      })
-
+      const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
       const element = React.createElement(QuotationPDF, {
         companyName: userProfile?.company_name || 'Your Company',
         companyNameCn: userProfile?.company_name_cn,
@@ -613,16 +597,8 @@ export default function QuotePage() {
         validityDays: quoteDetails.validityDays,
         tradeTerm: quoteDetails.tradeTerm,
         currency: formData.currency,
-        products: pdfProducts.map(p => ({
-          name: p.name,
-          model: p.model || undefined,
-          specs: p.specs || undefined,
-          qty: p.qty,
-          unit: p.unit,
-          unit_price_foreign: p.unit_price_foreign,
-          amount_foreign: p.amount_foreign,
-        })),
-        totalAmount: amountForeign,
+        products: pdfProducts.map((p) => ({ name: p.name, model: p.model || undefined, specs: p.specs || undefined, qty: p.qty, unit: p.unit, unit_price_foreign: p.unit_price_foreign, amount_foreign: p.amount_foreign })),
+        totalAmount: totalForeign,
         paymentTerms: quoteDetails.paymentTerms,
         deliveryTime: quoteDetails.deliveryTime,
         packing: quoteDetails.packing || undefined,
@@ -642,27 +618,17 @@ export default function QuotePage() {
 
       toast.success(`报价单 ${savedQuote.quotation_number} 已生成并保存`)
       setQuoteDialogOpen(false)
-    } catch (error: any) {
-      toast.error(error.message || '生成失败，请重试')
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : '生成失败，请重试')
     } finally {
       setGenerating(false)
     }
   }
 
-  // ── PDF Preview (no DB save) ─────────────────────────────────────
   const handlePreviewPDF = async () => {
-    if (!selectedCustomer && !isNewCustomer) {
-      toast.error('请先选择客户')
-      return
-    }
-    if (!selectedTradeResult) {
-      toast.error('请先填写成本信息并计算报价')
-      return
-    }
-    if (pdfProducts.length === 0 || pdfProducts.some(p => !p.name.trim())) {
-      toast.error('请填写所有产品名称')
-      return
-    }
+    if (!selectedCustomer && !isNewCustomer) { toast.error('请先选择客户'); return }
+    if (!selectedTradeResult) { toast.error('请先填写成本信息并计算报价'); return }
+    if (pdfProducts.length === 0 || pdfProducts.some((p) => !p.name.trim())) { toast.error('请填写所有产品名称'); return }
 
     setPreviewing(true)
     try {
@@ -673,9 +639,7 @@ export default function QuotePage() {
       const customerContact = selectedCustomer?.contact_name || newCustomerData.contact_name || ''
       const customerAddress = selectedCustomer?.address || newCustomerData.address || ''
       const totalForeign = pdfProducts.reduce((s, p) => s + p.amount_foreign, 0)
-      const today = new Date().toLocaleDateString('en-US', {
-        year: 'numeric', month: 'long', day: 'numeric',
-      })
+      const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
 
       const element = React.createElement(QuotationPDF, {
         companyName: userProfile?.company_name || 'Your Company',
@@ -693,15 +657,7 @@ export default function QuotePage() {
         validityDays: quoteDetails.validityDays,
         tradeTerm: quoteDetails.tradeTerm,
         currency: formData.currency,
-        products: pdfProducts.map(p => ({
-          name: p.name,
-          model: p.model || undefined,
-          specs: p.specs || undefined,
-          qty: p.qty,
-          unit: p.unit,
-          unit_price_foreign: p.unit_price_foreign,
-          amount_foreign: p.amount_foreign,
-        })),
+        products: pdfProducts.map((p) => ({ name: p.name, model: p.model || undefined, specs: p.specs || undefined, qty: p.qty, unit: p.unit, unit_price_foreign: p.unit_price_foreign, amount_foreign: p.amount_foreign })),
         totalAmount: totalForeign,
         paymentTerms: quoteDetails.paymentTerms,
         deliveryTime: quoteDetails.deliveryTime,
@@ -713,23 +669,23 @@ export default function QuotePage() {
       const blob = await pdf(element).toBlob()
       const url = URL.createObjectURL(blob)
       window.open(url, '_blank')
-      // Clean up after a short delay to allow browser to load the URL
       setTimeout(() => URL.revokeObjectURL(url), 5000)
-    } catch (error: any) {
-      toast.error(error.message || '预览失败，请重试')
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : '预览失败，请重试')
     } finally {
       setPreviewing(false)
     }
   }
 
-  // ── Render ──────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  const sym = getCurrencySymbol(formData.currency)
+
   return (
     <div className="p-8 pt-16 md:pt-8 space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Calculator className="w-6 h-6" />
-          <h1 className="text-2xl font-bold">报价计算器</h1>
-        </div>
+      <div className="flex items-center gap-3">
+        <Calculator className="w-6 h-6" />
+        <h1 className="text-2xl font-bold">报价计算器</h1>
       </div>
 
       {/* Exchange Rate */}
@@ -742,15 +698,8 @@ export default function QuotePage() {
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-blue-500">
-              更新于 {formatTime(rateUpdatedAt)}
-            </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={fetchExchangeRate}
-              disabled={rateLoading}
-            >
+            <span className="text-xs text-blue-500">更新于 {formatTime(rateUpdatedAt)}</span>
+            <Button variant="ghost" size="sm" onClick={fetchExchangeRate} disabled={rateLoading}>
               <RefreshCw className={`w-4 h-4 ${rateLoading ? 'animate-spin' : ''}`} />
             </Button>
           </div>
@@ -758,99 +707,114 @@ export default function QuotePage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Input Form */}
+        {/* ── Left: Input Form */}
         <Card>
-          <CardContent className="p-6 space-y-4">
-            <h2 className="font-bold mb-4">输入参数</h2>
+          <CardContent className="p-6 space-y-5">
+            <h2 className="font-bold">输入参数</h2>
 
-            {/* Product Selection */}
+            {/* Product Table */}
             <div className="space-y-2">
-              <label className="text-sm font-medium">选择产品（可选）</label>
-              <Dialog open={productDialogOpen} onOpenChange={setProductDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button variant="outline" className="w-full justify-between">
-                    {selectedProduct ? selectedProduct.name : '从产品库选择...'}
-                    <ChevronDown className="ml-2 h-4 w-4" />
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>选择产品</DialogTitle>
-                    <DialogDescription>选择产品后自动填充成本价</DialogDescription>
-                  </DialogHeader>
-                  <div className="max-h-[300px] overflow-y-auto">
-                    {products.length === 0 ? (
-                      <p className="text-center py-4 text-gray-500">
-                        暂无产品，请先添加产品
-                      </p>
-                    ) : (
-                      <div className="space-y-2">
-                        {products.map((p) => (
-                          <div
-                            key={p.id}
-                            onClick={() => handleProductSelect(p)}
-                            className="p-3 border rounded-lg cursor-pointer hover:bg-gray-50"
-                          >
-                            <div className="font-medium">{p.name}</div>
-                            <div className="text-sm text-gray-500">
-                              ¥{p.cost_price} {p.model && `- ${p.model}`}
-                            </div>
+              <label className="text-sm font-medium">产品列表</label>
+              <div className="border rounded-lg overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="text-left p-2 font-medium text-gray-500">名称</th>
+                      <th className="text-left p-2 font-medium text-gray-500 w-20">型号</th>
+                      <th className="text-left p-2 font-medium text-gray-500 w-14">单位</th>
+                      <th className="text-right p-2 font-medium text-gray-500 w-24">成本价(¥)*</th>
+                      <th className="text-right p-2 font-medium text-gray-500 w-20">数量*</th>
+                      <th className="w-8"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {calcProducts.map((row) => (
+                      <tr key={row.id} className="border-t">
+                        <td className="p-1">
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              title="从产品库选择"
+                              onClick={() => setProductPickerRowId(row.id)}
+                              className="flex-shrink-0 p-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-blue-600"
+                            >
+                              <Package className="w-3.5 h-3.5" />
+                            </button>
+                            <input
+                              className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
+                              value={row.name}
+                              onChange={(e) => updateCalcProduct(row.id, 'name', e.target.value)}
+                              placeholder="产品名称"
+                            />
                           </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </DialogContent>
-              </Dialog>
+                        </td>
+                        <td className="p-1">
+                          <input
+                            className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
+                            value={row.model}
+                            onChange={(e) => updateCalcProduct(row.id, 'model', e.target.value)}
+                            placeholder="型号"
+                          />
+                        </td>
+                        <td className="p-1">
+                          <input
+                            className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
+                            value={row.unit}
+                            onChange={(e) => updateCalcProduct(row.id, 'unit', e.target.value)}
+                            placeholder="pc"
+                          />
+                        </td>
+                        <td className="p-1">
+                          <input
+                            type="number"
+                            className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
+                            value={row.costPrice}
+                            onChange={(e) => updateCalcProduct(row.id, 'costPrice', e.target.value)}
+                            placeholder="0"
+                          />
+                        </td>
+                        <td className="p-1">
+                          <input
+                            type="number"
+                            className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
+                            value={row.quantity}
+                            onChange={(e) => updateCalcProduct(row.id, 'quantity', e.target.value)}
+                            placeholder="100"
+                          />
+                        </td>
+                        <td className="p-1 text-center">
+                          {calcProducts.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => removeCalcProduct(row.id)}
+                              className="text-gray-300 hover:text-red-500"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <button
+                type="button"
+                onClick={addCalcProduct}
+                className="flex items-center gap-1 text-xs text-blue-600 hover:underline"
+              >
+                <Plus className="w-3 h-3" /> 添加产品
+              </button>
             </div>
 
-            {/* Change 3: Manual product name – shown when nothing selected from library */}
-            {!selectedProduct && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium">产品名称（报价单显示）</label>
-                <Input
-                  value={productName}
-                  onChange={(e) => setProductName(e.target.value)}
-                  placeholder="如 LED Flood Light 100W"
-                />
-              </div>
-            )}
-
-            {/* Basic Inputs */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">产品成本 (CNY) *</label>
-                <Input
-                  type="number"
-                  value={formData.productCost}
-                  onChange={(e) =>
-                    setFormData({ ...formData, productCost: e.target.value })
-                  }
-                  placeholder="工厂出厂价"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">数量 *</label>
-                <Input
-                  type="number"
-                  value={formData.quantity}
-                  onChange={(e) =>
-                    setFormData({ ...formData, quantity: e.target.value })
-                  }
-                  placeholder="数量"
-                />
-              </div>
-            </div>
-
+            {/* Shared costs */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium">国内费用 (CNY)</label>
                 <Input
                   type="number"
                   value={formData.domesticCost}
-                  onChange={(e) =>
-                    setFormData({ ...formData, domesticCost: e.target.value })
-                  }
+                  onChange={(e) => setFormData({ ...formData, domesticCost: e.target.value })}
                   placeholder="拖车费+港杂费"
                 />
               </div>
@@ -859,9 +823,7 @@ export default function QuotePage() {
                 <Input
                   type="number"
                   value={formData.freight}
-                  onChange={(e) =>
-                    setFormData({ ...formData, freight: e.target.value })
-                  }
+                  onChange={(e) => setFormData({ ...formData, freight: e.target.value })}
                   placeholder="海运费总额"
                 />
               </div>
@@ -873,9 +835,7 @@ export default function QuotePage() {
                 <Input
                   type="number"
                   value={formData.destinationCost}
-                  onChange={(e) =>
-                    setFormData({ ...formData, destinationCost: e.target.value })
-                  }
+                  onChange={(e) => setFormData({ ...formData, destinationCost: e.target.value })}
                   placeholder="DAP/DPU/DDP用"
                 />
               </div>
@@ -885,9 +845,7 @@ export default function QuotePage() {
                   type="number"
                   step="0.1"
                   value={formData.insuranceRate}
-                  onChange={(e) =>
-                    setFormData({ ...formData, insuranceRate: e.target.value })
-                  }
+                  onChange={(e) => setFormData({ ...formData, insuranceRate: e.target.value })}
                   placeholder="CIF/CIP用"
                 />
               </div>
@@ -899,9 +857,7 @@ export default function QuotePage() {
                 <Input
                   type="number"
                   value={formData.profitRate}
-                  onChange={(e) =>
-                    setFormData({ ...formData, profitRate: e.target.value })
-                  }
+                  onChange={(e) => setFormData({ ...formData, profitRate: e.target.value })}
                   placeholder="10"
                 />
               </div>
@@ -913,16 +869,14 @@ export default function QuotePage() {
                   </SelectTrigger>
                   <SelectContent>
                     {currencies.map((c) => (
-                      <SelectItem key={c.value} value={c.value}>
-                        {c.label}
-                      </SelectItem>
+                      <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
             </div>
 
-            {/* LCL/FCL Toggle */}
+            {/* LCL/FCL */}
             <div className="flex items-center gap-2">
               <input
                 type="checkbox"
@@ -941,49 +895,21 @@ export default function QuotePage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-xs text-gray-500">散货数量</label>
-                    <Input
-                      type="number"
-                      value={lclData.quantity}
-                      onChange={(e) =>
-                        setLclData({ ...lclData, quantity: e.target.value })
-                      }
-                      placeholder="500"
-                    />
+                    <Input type="number" value={lclData.quantity} onChange={(e) => setLclData({ ...lclData, quantity: e.target.value })} placeholder="500" />
                   </div>
                   <div>
                     <label className="text-xs text-gray-500">散货海运费</label>
-                    <Input
-                      type="number"
-                      value={lclData.freight}
-                      onChange={(e) =>
-                        setLclData({ ...lclData, freight: e.target.value })
-                      }
-                      placeholder="800"
-                    />
+                    <Input type="number" value={lclData.freight} onChange={(e) => setLclData({ ...lclData, freight: e.target.value })} placeholder="800" />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-xs text-gray-500">整柜数量</label>
-                    <Input
-                      type="number"
-                      value={fclData.quantity}
-                      onChange={(e) =>
-                        setFclData({ ...fclData, quantity: e.target.value })
-                      }
-                      placeholder="2000"
-                    />
+                    <Input type="number" value={fclData.quantity} onChange={(e) => setFclData({ ...fclData, quantity: e.target.value })} placeholder="2000" />
                   </div>
                   <div>
                     <label className="text-xs text-gray-500">整柜海运费</label>
-                    <Input
-                      type="number"
-                      value={fclData.freight}
-                      onChange={(e) =>
-                        setFclData({ ...fclData, freight: e.target.value })
-                      }
-                      placeholder="1500"
-                    />
+                    <Input type="number" value={fclData.freight} onChange={(e) => setFclData({ ...fclData, freight: e.target.value })} placeholder="1500" />
                   </div>
                 </div>
                 {discount > 0 && (
@@ -996,64 +922,151 @@ export default function QuotePage() {
           </CardContent>
         </Card>
 
-        {/* Results */}
+        {/* ── Right: Results */}
         <div className="space-y-4">
           <h2 className="font-bold">报价结果</h2>
 
-          {results.length === 0 ? (
+          {!multiResults ? (
             <Card>
               <CardContent className="py-12 text-center text-gray-500">
                 请输入产品成本和数量
               </CardContent>
             </Card>
           ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              {results.map((result) => (
-                <Card
-                  key={result.term}
-                  className={
-                    result.term === 'FOB' || result.term === 'CIF'
-                      ? 'border-blue-500 bg-blue-50'
-                      : ''
-                  }
-                >
-                  <CardContent className="p-4">
-                    <div className="text-xs text-gray-500 mb-1">
-                      {TRADE_TERMS.find((t) => t.code === result.term)?.desc}
-                    </div>
-                    <div className="text-lg font-bold">
-                      {getCurrencySymbol(formData.currency)}
-                      {formatPrice(result.priceForeign)}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      ¥{formatPrice(result.priceCNY)}
-                    </div>
+            <>
+              {/* Order totals table */}
+              <Card>
+                <CardContent className="p-0">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-gray-50">
+                        <th className="text-left p-3 font-medium text-gray-500">贸易术语</th>
+                        <th className="text-right p-3 font-medium text-gray-500">{formData.currency} 合计</th>
+                        <th className="text-right p-3 font-medium text-gray-500">CNY 合计</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {multiResults.orderTotals.map((r) => {
+                        const isSelected = r.term === quoteDetails.tradeTerm
+                        const isHighlighted = r.term === 'FOB' || r.term === 'CIF'
+                        return (
+                          <tr
+                            key={r.term}
+                            onClick={() => setQuoteDetails((prev) => ({ ...prev, tradeTerm: r.term }))}
+                            className={`border-b cursor-pointer transition-colors ${
+                              isSelected
+                                ? 'bg-blue-50 border-l-2 border-l-blue-500'
+                                : isHighlighted
+                                ? 'hover:bg-gray-50 text-blue-700 font-medium'
+                                : 'hover:bg-gray-50'
+                            }`}
+                          >
+                            <td className="p-3">
+                              <span className="font-mono font-medium">{r.term}</span>
+                              <span className="text-xs text-gray-400 ml-2">
+                                {TRADE_TERMS.find((t) => t.code === r.term)?.desc}
+                              </span>
+                            </td>
+                            <td className="p-3 text-right font-medium">
+                              {sym}{formatPrice(r.priceForeign)}
+                            </td>
+                            <td className="p-3 text-right text-gray-500">
+                              ¥{r.priceCNY.toFixed(2)}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                  <p className="text-xs text-gray-400 p-3">点击行可选择贸易术语</p>
+                </CardContent>
+              </Card>
+
+              {/* Product breakdown (≥2 products) */}
+              {calcProducts.filter((p) => parseFloat(p.costPrice) > 0).length >= 2 && (
+                <Card>
+                  <CardContent className="p-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowDetail((v) => !v)}
+                      className="flex items-center gap-2 text-sm font-medium text-gray-700 w-full"
+                    >
+                      {showDetail ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                      产品明细（{quoteDetails.tradeTerm}）
+                    </button>
+                    {showDetail && (
+                      <div className="mt-3 space-y-2">
+                        {multiResults.byProduct.map(({ productId, results }) => {
+                          const calc = calcProducts.find((p) => p.id === productId)
+                          if (!calc) return null
+                          const r = results.find((r) => r.term === quoteDetails.tradeTerm)
+                          if (!r) return null
+                          const qty = parseFloat(calc.quantity) || 1
+                          return (
+                            <div key={productId} className="flex items-center justify-between text-xs text-gray-700 bg-gray-50 rounded px-3 py-2">
+                              <span className="font-medium">{calc.name || '产品'}{calc.model ? ` (${calc.model})` : ''}</span>
+                              <span className="text-gray-500">
+                                {sym}{formatPrice(r.priceForeign)}/{calc.unit} × {qty} = <span className="font-semibold text-blue-700">{sym}{(r.priceForeign * qty).toFixed(2)}</span>
+                              </span>
+                            </div>
+                          )
+                        })}
+                        <div className="flex justify-between text-xs font-bold border-t pt-2 px-3">
+                          <span>合计</span>
+                          <span className="text-blue-700">
+                            {sym}{(multiResults.orderTotals.find((r) => r.term === quoteDetails.tradeTerm)?.priceForeign || 0).toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
-              ))}
-            </div>
-          )}
+              )}
 
-          {results.length > 0 && (
-            <Button className="w-full" onClick={openQuoteDialog}>
-              <FileText className="mr-2 h-4 w-4" />
-              生成报价单
-            </Button>
+              <Button className="w-full" onClick={openQuoteDialog}>
+                <FileText className="mr-2 h-4 w-4" />
+                生成报价单
+              </Button>
+            </>
           )}
         </div>
       </div>
 
-      {/* ── Quote Generation Dialog ─────────────────────────────── */}
+      {/* ── Product Library Picker Dialog */}
+      <Dialog open={productPickerRowId !== null} onOpenChange={(open) => { if (!open) setProductPickerRowId(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>从产品库选择</DialogTitle>
+            <DialogDescription>选择产品后自动填充名称和成本价</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[300px] overflow-y-auto">
+            {libraryProducts.length === 0 ? (
+              <p className="text-center py-4 text-gray-500">暂无产品，请先在产品库添加</p>
+            ) : (
+              <div className="space-y-2">
+                {libraryProducts.map((p) => (
+                  <div
+                    key={p.id}
+                    onClick={() => handleLibraryProductSelect(p)}
+                    className="p-3 border rounded-lg cursor-pointer hover:bg-gray-50"
+                  >
+                    <div className="font-medium">{p.name}</div>
+                    <div className="text-sm text-gray-500">¥{p.cost_price} {p.model && `- ${p.model}`}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Quote Generation Dialog */}
       <Dialog open={quoteDialogOpen} onOpenChange={setQuoteDialogOpen}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>
-              {quoteStep === 1 ? '第一步：选择客户' : '第二步：报价单信息'}
-            </DialogTitle>
+            <DialogTitle>{quoteStep === 1 ? '第一步：选择客户' : '第二步：报价单信息'}</DialogTitle>
             <DialogDescription>
-              {quoteStep === 1
-                ? '搜索已有客户，或新建客户'
-                : '填写报价单详情，完成后生成 PDF'}
+              {quoteStep === 1 ? '搜索已有客户，或新建客户' : '填写报价单详情，完成后生成 PDF'}
             </DialogDescription>
           </DialogHeader>
 
@@ -1068,10 +1081,7 @@ export default function QuotePage() {
                       className="pl-9"
                       placeholder="搜索客户公司名称..."
                       value={customerQuery}
-                      onChange={(e) => {
-                        setCustomerQuery(e.target.value)
-                        setSelectedCustomer(null)
-                      }}
+                      onChange={(e) => { setCustomerQuery(e.target.value); setSelectedCustomer(null) }}
                     />
                   </div>
 
@@ -1087,14 +1097,10 @@ export default function QuotePage() {
                         <div
                           key={c.id}
                           onClick={() => handleSelectCustomer(c)}
-                          className={`p-3 cursor-pointer hover:bg-gray-50 ${
-                            selectedCustomer?.id === c.id ? 'bg-blue-50' : ''
-                          }`}
+                          className={`p-3 cursor-pointer hover:bg-gray-50 ${selectedCustomer?.id === c.id ? 'bg-blue-50' : ''}`}
                         >
                           <div className="font-medium text-sm">{c.company_name}</div>
-                          {c.contact_name && (
-                            <div className="text-xs text-gray-500">{c.contact_name}</div>
-                          )}
+                          {c.contact_name && <div className="text-xs text-gray-500">{c.contact_name}</div>}
                         </div>
                       ))}
                     </div>
@@ -1102,119 +1108,55 @@ export default function QuotePage() {
 
                   {selectedCustomer && (
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                      <div className="font-medium text-sm text-blue-800">
-                        已选择：{selectedCustomer.company_name}
-                      </div>
-                      {lastQuote && (
+                      <div className="font-medium text-sm text-blue-800">已选择：{selectedCustomer.company_name}</div>
+                      {lastQuote ? (
                         <div className="text-xs text-blue-600 mt-1">
-                          上次报价：
-                          {new Date(lastQuote.date).toLocaleDateString('zh-CN')}，
-                          {lastQuote.trade_term}，{lastQuote.currency}{' '}
-                          {lastQuote.total_amount_foreign.toFixed(2)}
+                          上次报价：{new Date(lastQuote.date).toLocaleDateString('zh-CN')}，{lastQuote.trade_term}，{lastQuote.currency} {lastQuote.total_amount_foreign.toFixed(2)}
                         </div>
-                      )}
-                      {!lastQuote && (
+                      ) : (
                         <div className="text-xs text-blue-500 mt-1">暂无历史报价</div>
                       )}
                     </div>
                   )}
 
                   <div className="flex items-center gap-2 text-sm text-gray-500">
-                    <div className="flex-1 border-t" />
-                    <span>或</span>
-                    <div className="flex-1 border-t" />
+                    <div className="flex-1 border-t" /><span>或</span><div className="flex-1 border-t" />
                   </div>
-
-                  <Button
-                    variant="outline"
-                    className="w-full"
-                    onClick={() => setIsNewCustomer(true)}
-                  >
-                    + 新建客户
-                  </Button>
+                  <Button variant="outline" className="w-full" onClick={() => setIsNewCustomer(true)}>+ 新建客户</Button>
                 </>
               ) : (
                 <>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-gray-500 -mb-2"
-                    onClick={() => setIsNewCustomer(false)}
-                  >
-                    <ArrowLeft className="w-4 h-4 mr-1" />
-                    返回搜索
+                  <Button variant="ghost" size="sm" className="text-gray-500 -mb-2" onClick={() => setIsNewCustomer(false)}>
+                    <ArrowLeft className="w-4 h-4 mr-1" />返回搜索
                   </Button>
                   <div className="space-y-3">
                     <div>
                       <label className="text-sm font-medium">公司名称 *</label>
-                      <Input
-                        className="mt-1"
-                        value={newCustomerData.company_name}
-                        onChange={(e) =>
-                          setNewCustomerData({ ...newCustomerData, company_name: e.target.value })
-                        }
-                        placeholder="客户公司名称"
-                      />
+                      <Input className="mt-1" value={newCustomerData.company_name} onChange={(e) => setNewCustomerData({ ...newCustomerData, company_name: e.target.value })} placeholder="客户公司名称" />
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="text-sm font-medium">联系人</label>
-                        <Input
-                          className="mt-1"
-                          value={newCustomerData.contact_name}
-                          onChange={(e) =>
-                            setNewCustomerData({ ...newCustomerData, contact_name: e.target.value })
-                          }
-                          placeholder="联系人姓名"
-                        />
+                        <Input className="mt-1" value={newCustomerData.contact_name} onChange={(e) => setNewCustomerData({ ...newCustomerData, contact_name: e.target.value })} placeholder="联系人姓名" />
                       </div>
                       <div>
                         <label className="text-sm font-medium">国家</label>
-                        <Input
-                          className="mt-1"
-                          value={newCustomerData.country}
-                          onChange={(e) =>
-                            setNewCustomerData({ ...newCustomerData, country: e.target.value })
-                          }
-                          placeholder="如 USA"
-                        />
+                        <Input className="mt-1" value={newCustomerData.country} onChange={(e) => setNewCustomerData({ ...newCustomerData, country: e.target.value })} placeholder="如 USA" />
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="text-sm font-medium">邮箱</label>
-                        <Input
-                          className="mt-1"
-                          type="email"
-                          value={newCustomerData.email}
-                          onChange={(e) =>
-                            setNewCustomerData({ ...newCustomerData, email: e.target.value })
-                          }
-                          placeholder="email@example.com"
-                        />
+                        <Input className="mt-1" type="email" value={newCustomerData.email} onChange={(e) => setNewCustomerData({ ...newCustomerData, email: e.target.value })} placeholder="email@example.com" />
                       </div>
                       <div>
                         <label className="text-sm font-medium">电话</label>
-                        <Input
-                          className="mt-1"
-                          value={newCustomerData.phone}
-                          onChange={(e) =>
-                            setNewCustomerData({ ...newCustomerData, phone: e.target.value })
-                          }
-                          placeholder="WhatsApp 等"
-                        />
+                        <Input className="mt-1" value={newCustomerData.phone} onChange={(e) => setNewCustomerData({ ...newCustomerData, phone: e.target.value })} placeholder="WhatsApp 等" />
                       </div>
                     </div>
                     <div>
                       <label className="text-sm font-medium">地址</label>
-                      <Input
-                        className="mt-1"
-                        value={newCustomerData.address}
-                        onChange={(e) =>
-                          setNewCustomerData({ ...newCustomerData, address: e.target.value })
-                        }
-                        placeholder="公司地址（可选）"
-                      />
+                      <Input className="mt-1" value={newCustomerData.address} onChange={(e) => setNewCustomerData({ ...newCustomerData, address: e.target.value })} placeholder="公司地址（可选）" />
                     </div>
                   </div>
                 </>
@@ -1222,10 +1164,7 @@ export default function QuotePage() {
 
               <Button
                 className="w-full"
-                disabled={
-                  (!selectedCustomer && !isNewCustomer) ||
-                  (isNewCustomer && !newCustomerData.company_name.trim())
-                }
+                disabled={(!selectedCustomer && !isNewCustomer) || (isNewCustomer && !newCustomerData.company_name.trim())}
                 onClick={() => setQuoteStep(2)}
               >
                 下一步
@@ -1236,27 +1175,16 @@ export default function QuotePage() {
           {/* Step 2: Quote Details */}
           {quoteStep === 2 && (
             <div className="space-y-4">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-gray-500 -mb-2"
-                onClick={() => setQuoteStep(1)}
-              >
-                <ArrowLeft className="w-4 h-4 mr-1" />
-                返回选择客户
+              <Button variant="ghost" size="sm" className="text-gray-500 -mb-2" onClick={() => setQuoteStep(1)}>
+                <ArrowLeft className="w-4 h-4 mr-1" />返回选择客户
               </Button>
 
-              {/* Customer reminder */}
               <div className="bg-gray-50 rounded-lg p-3 text-sm">
                 <span className="text-gray-500">客户：</span>
-                <span className="font-medium">
-                  {selectedCustomer?.company_name || newCustomerData.company_name}
-                </span>
+                <span className="font-medium">{selectedCustomer?.company_name || newCustomerData.company_name}</span>
                 {lastQuote && (
                   <div className="text-xs text-blue-600 mt-1">
-                    上次报价：{new Date(lastQuote.date).toLocaleDateString('zh-CN')}，
-                    {lastQuote.trade_term} {lastQuote.currency}{' '}
-                    {lastQuote.total_amount_foreign.toFixed(2)}
+                    上次报价：{new Date(lastQuote.date).toLocaleDateString('zh-CN')}，{lastQuote.trade_term} {lastQuote.currency} {lastQuote.total_amount_foreign.toFixed(2)}
                   </div>
                 )}
               </div>
@@ -1265,20 +1193,12 @@ export default function QuotePage() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">贸易术语</label>
-                  <Select
-                    value={quoteDetails.tradeTerm}
-                    onValueChange={(v) =>
-                      setQuoteDetails({ ...quoteDetails, tradeTerm: v })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
+                  <Select value={quoteDetails.tradeTerm} onValueChange={(v) => setQuoteDetails({ ...quoteDetails, tradeTerm: v || quoteDetails.tradeTerm })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {results.map((r) => (
+                      {(multiResults?.orderTotals || []).map((r) => (
                         <SelectItem key={r.term} value={r.term}>
-                          {r.term} — {getCurrencySymbol(formData.currency)}
-                          {formatPrice(r.priceForeign)}
+                          {r.term} — {sym}{formatPrice(r.priceForeign)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -1286,18 +1206,8 @@ export default function QuotePage() {
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">单据类型</label>
-                  <Select
-                    value={quoteDetails.type}
-                    onValueChange={(v) =>
-                      setQuoteDetails({
-                        ...quoteDetails,
-                        type: v as 'QUOTATION' | 'PI',
-                      })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
+                  <Select value={quoteDetails.type} onValueChange={(v) => setQuoteDetails({ ...quoteDetails, type: (v || quoteDetails.type) as 'QUOTATION' | 'PI' })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="QUOTATION">Quotation</SelectItem>
                       <SelectItem value="PI">Proforma Invoice</SelectItem>
@@ -1306,215 +1216,124 @@ export default function QuotePage() {
                 </div>
               </div>
 
-              {/* Change 7: Products rows – replaces old single-product total preview */}
-              {selectedTradeResult && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="text-sm font-medium">产品明细</label>
-                    <button
-                      type="button"
-                      className="text-xs text-blue-600 hover:underline"
-                      onClick={() => {
-                        setPdfProducts(prev => [...prev, {
-                          name: '',
-                          model: '',
-                          specs: '',
-                          qty: 1,
-                          unit: selectedProduct?.unit || 'pc',
-                          unit_price_foreign: selectedTradeResult.priceForeign,
-                          amount_foreign: selectedTradeResult.priceForeign,
-                        }])
-                      }}
-                    >
-                      + 添加行
-                    </button>
-                  </div>
-                  <div className="border rounded-lg overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="text-left p-2 font-medium text-gray-500">产品名称</th>
-                          <th className="text-right p-2 font-medium text-gray-500 w-16">数量</th>
-                          <th className="text-right p-2 font-medium text-gray-500 w-20">单价</th>
-                          <th className="text-right p-2 font-medium text-gray-500 w-20">小计</th>
-                          <th className="p-2 w-6"></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {pdfProducts.map((row, idx) => {
-                          // sync unit price from trade term for first row if it's the main product
-                          const isMain = idx === 0
-                          return (
-                            <tr key={idx} className="border-t">
-                              <td className="p-1">
-                                <input
-                                  className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
-                                  value={row.name}
-                                  onChange={e => {
-                                    const updated = [...pdfProducts]
-                                    updated[idx] = { ...updated[idx], name: e.target.value }
-                                    setPdfProducts(updated)
-                                  }}
-                                  placeholder="产品名称"
-                                />
-                              </td>
-                              <td className="p-1">
-                                <input
-                                  type="number"
-                                  className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
-                                  value={row.qty}
-                                  onChange={e => {
-                                    const qty = parseFloat(e.target.value) || 1
-                                    const updated = [...pdfProducts]
-                                    updated[idx] = { ...updated[idx], qty, amount_foreign: qty * updated[idx].unit_price_foreign }
-                                    setPdfProducts(updated)
-                                  }}
-                                />
-                              </td>
-                              <td className="p-1">
-                                <input
-                                  type="number"
-                                  className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
-                                  value={row.unit_price_foreign.toFixed(4)}
-                                  onChange={e => {
-                                    const price = parseFloat(e.target.value) || 0
-                                    const updated = [...pdfProducts]
-                                    updated[idx] = { ...updated[idx], unit_price_foreign: price, amount_foreign: price * updated[idx].qty }
-                                    setPdfProducts(updated)
-                                  }}
-                                />
-                              </td>
-                              <td className="p-2 text-right font-medium">
-                                {getCurrencySymbol(formData.currency)}{row.amount_foreign.toFixed(2)}
-                              </td>
-                              <td className="p-1 text-center">
-                                {pdfProducts.length > 1 && (
-                                  <button
-                                    type="button"
-                                    className="text-red-400 hover:text-red-600 text-xs"
-                                    onClick={() => setPdfProducts(prev => prev.filter((_, i) => i !== idx))}
-                                  >
-                                    ×
-                                  </button>
-                                )}
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                      <tfoot className="bg-gray-50 border-t">
-                        <tr>
-                          <td colSpan={3} className="p-2 text-right text-xs font-bold text-gray-600">合计</td>
-                          <td className="p-2 text-right text-xs font-bold text-blue-700">
-                            {getCurrencySymbol(formData.currency)}{pdfProducts.reduce((s, p) => s + p.amount_foreign, 0).toFixed(2)}
-                          </td>
-                          <td></td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
+              {/* Product rows */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium">产品明细</label>
+                  <button
+                    type="button"
+                    className="text-xs text-blue-600 hover:underline"
+                    onClick={() => {
+                      const price = selectedTradeResult?.priceForeign || 0
+                      setPdfProducts((prev) => [...prev, { name: '', model: '', specs: '', qty: 1, unit: 'pc', unit_price_foreign: price, amount_foreign: price }])
+                    }}
+                  >
+                    + 添加行
+                  </button>
                 </div>
-              )}
+                <div className="border rounded-lg overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="text-left p-2 font-medium text-gray-500">产品名称</th>
+                        <th className="text-right p-2 font-medium text-gray-500 w-16">数量</th>
+                        <th className="text-right p-2 font-medium text-gray-500 w-20">单价</th>
+                        <th className="text-right p-2 font-medium text-gray-500 w-20">小计</th>
+                        <th className="p-2 w-6"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pdfProducts.map((row, idx) => (
+                        <tr key={idx} className="border-t">
+                          <td className="p-1">
+                            <input
+                              className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
+                              value={row.name}
+                              onChange={(e) => { const u = [...pdfProducts]; u[idx] = { ...u[idx], name: e.target.value }; setPdfProducts(u) }}
+                              placeholder="产品名称"
+                            />
+                          </td>
+                          <td className="p-1">
+                            <input
+                              type="number"
+                              className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
+                              value={row.qty}
+                              onChange={(e) => {
+                                const qty = parseFloat(e.target.value) || 1
+                                const u = [...pdfProducts]; u[idx] = { ...u[idx], qty, amount_foreign: qty * u[idx].unit_price_foreign }; setPdfProducts(u)
+                              }}
+                            />
+                          </td>
+                          <td className="p-1">
+                            <input
+                              type="number"
+                              className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
+                              value={row.unit_price_foreign.toFixed(4)}
+                              onChange={(e) => {
+                                const price = parseFloat(e.target.value) || 0
+                                const u = [...pdfProducts]; u[idx] = { ...u[idx], unit_price_foreign: price, amount_foreign: price * u[idx].qty }; setPdfProducts(u)
+                              }}
+                            />
+                          </td>
+                          <td className="p-2 text-right font-medium">{sym}{row.amount_foreign.toFixed(2)}</td>
+                          <td className="p-1 text-center">
+                            {pdfProducts.length > 1 && (
+                              <button type="button" className="text-red-400 hover:text-red-600" onClick={() => setPdfProducts((prev) => prev.filter((_, i) => i !== idx))}>×</button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="bg-gray-50 border-t">
+                      <tr>
+                        <td colSpan={3} className="p-2 text-right text-xs font-bold text-gray-600">合计</td>
+                        <td className="p-2 text-right text-xs font-bold text-blue-700">{sym}{pdfProducts.reduce((s, p) => s + p.amount_foreign, 0).toFixed(2)}</td>
+                        <td></td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
 
               {/* Payment Terms */}
               <div className="space-y-2">
                 <label className="text-sm font-medium">付款条件</label>
-                <Select
-                  value={quoteDetails.paymentTerms}
-                  onValueChange={(v) =>
-                    setQuoteDetails({ ...quoteDetails, paymentTerms: v })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
+                <Select value={quoteDetails.paymentTerms} onValueChange={(v) => setQuoteDetails({ ...quoteDetails, paymentTerms: v || quoteDetails.paymentTerms })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {PAYMENT_TERMS_OPTIONS.map((opt) => (
-                      <SelectItem key={opt} value={opt}>
-                        {opt}
-                      </SelectItem>
-                    ))}
+                    {PAYMENT_TERMS_OPTIONS.map((opt) => (<SelectItem key={opt} value={opt}>{opt}</SelectItem>))}
                   </SelectContent>
                 </Select>
               </div>
 
-              {/* Delivery + Validity */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">交货期</label>
-                  <Input
-                    value={quoteDetails.deliveryTime}
-                    onChange={(e) =>
-                      setQuoteDetails({ ...quoteDetails, deliveryTime: e.target.value })
-                    }
-                    placeholder="如 30 days after deposit"
-                  />
+                  <Input value={quoteDetails.deliveryTime} onChange={(e) => setQuoteDetails({ ...quoteDetails, deliveryTime: e.target.value })} placeholder="如 30 days after deposit" />
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">有效期（天）</label>
-                  <Input
-                    type="number"
-                    value={quoteDetails.validityDays}
-                    onChange={(e) =>
-                      setQuoteDetails({
-                        ...quoteDetails,
-                        validityDays: parseInt(e.target.value) || 30,
-                      })
-                    }
-                    placeholder="30"
-                  />
+                  <Input type="number" value={quoteDetails.validityDays} onChange={(e) => setQuoteDetails({ ...quoteDetails, validityDays: parseInt(e.target.value) || 30 })} placeholder="30" />
                 </div>
               </div>
 
-              {/* Packing */}
               <div className="space-y-2">
                 <label className="text-sm font-medium">包装方式</label>
-                <Input
-                  value={quoteDetails.packing}
-                  onChange={(e) =>
-                    setQuoteDetails({ ...quoteDetails, packing: e.target.value })
-                  }
-                  placeholder="如 Standard export carton"
-                />
+                <Input value={quoteDetails.packing} onChange={(e) => setQuoteDetails({ ...quoteDetails, packing: e.target.value })} placeholder="如 Standard export carton" />
               </div>
 
-              {/* Remarks */}
               <div className="space-y-2">
                 <label className="text-sm font-medium">备注</label>
-                <Textarea
-                  value={quoteDetails.remarks}
-                  onChange={(e) =>
-                    setQuoteDetails({ ...quoteDetails, remarks: e.target.value })
-                  }
-                  placeholder="其他说明..."
-                  rows={3}
-                />
+                <Textarea value={quoteDetails.remarks} onChange={(e) => setQuoteDetails({ ...quoteDetails, remarks: e.target.value })} placeholder="其他说明..." rows={3} />
               </div>
 
               <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  className="flex-1"
-                  onClick={handlePreviewPDF}
-                  disabled={previewing || generating}
-                >
-                  {previewing ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <FileText className="mr-2 h-4 w-4" />
-                  )}
+                <Button variant="outline" className="flex-1" onClick={handlePreviewPDF} disabled={previewing || generating}>
+                  {previewing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
                   预览
                 </Button>
-                <Button
-                  className="flex-1"
-                  onClick={handleGeneratePDF}
-                  disabled={generating || previewing}
-                >
-                  {generating ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <FileText className="mr-2 h-4 w-4" />
-                  )}
+                <Button className="flex-1" onClick={handleGeneratePDF} disabled={generating || previewing}>
+                  {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
                   保存并下载
                 </Button>
               </div>
