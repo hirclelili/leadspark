@@ -1,11 +1,28 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
-import { FileText, ChevronLeft, ChevronRight, ChevronRight as ArrowRight } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { FileText, ChevronLeft, ChevronRight, ChevronRight as ArrowRight, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+
+const STATUS_CONFIG = {
+  draft:       { label: '草稿',   color: 'bg-gray-100 text-gray-500' },
+  sent:        { label: '已发送', color: 'bg-blue-100 text-blue-600' },
+  negotiating: { label: '议价中', color: 'bg-yellow-100 text-yellow-600' },
+  won:         { label: '已成交', color: 'bg-green-100 text-green-700' },
+  lost:        { label: '已流失', color: 'bg-red-100 text-red-500' },
+} as const
+type QuoteStatus = keyof typeof STATUS_CONFIG
 
 interface Quotation {
   id: string
@@ -17,30 +34,61 @@ interface Quotation {
   customer_id: string | null
   customers: { company_name: string } | null
   products: Array<{ name: string; qty: number }>
+  status?: QuoteStatus
 }
 
 const CURRENCY_SYMBOL: Record<string, string> = {
-  USD: '$',
-  EUR: '€',
-  GBP: '£',
+  USD: '$', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$', AED: 'AED ', SGD: 'S$',
+}
+
+function getDateRange(range: string): { date_from: string; date_to: string } {
+  const now = new Date()
+  if (range === 'month') {
+    const from = new Date(now.getFullYear(), now.getMonth(), 1)
+    return { date_from: from.toISOString().split('T')[0], date_to: '' }
+  }
+  if (range === '3months') {
+    const from = new Date(now)
+    from.setMonth(from.getMonth() - 3)
+    return { date_from: from.toISOString().split('T')[0], date_to: '' }
+  }
+  return { date_from: '', date_to: '' }
 }
 
 export default function QuoteHistoryPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+
   const [quotations, setQuotations] = useState<Quotation[]>([])
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const limit = 10
 
-  useEffect(() => {
-    fetchQuotations()
-  }, [page])
+  // Filter state (synced from URL)
+  const [search, setSearch] = useState(searchParams.get('search') || '')
+  const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '')
+  const [dateRange, setDateRange] = useState(searchParams.get('range') || '')
 
-  const fetchQuotations = async () => {
+  // Debounce search input
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const fetchQuotations = useCallback(async (
+    pg: number,
+    q: string,
+    status: string,
+    range: string
+  ) => {
     setLoading(true)
     try {
-      const res = await fetch(`/api/quotations?page=${page}&limit=${limit}`)
+      const { date_from, date_to } = getDateRange(range)
+      const params = new URLSearchParams({ page: String(pg), limit: String(limit) })
+      if (q) params.set('search', q)
+      if (status) params.set('status', status)
+      if (date_from) params.set('date_from', date_from)
+      if (date_to) params.set('date_to', date_to)
+
+      const res = await fetch(`/api/quotations?${params}`)
       const data = await res.json()
       setQuotations(data.quotations || [])
       setTotal(data.total || 0)
@@ -49,8 +97,55 @@ export default function QuoteHistoryPage() {
     } finally {
       setLoading(false)
     }
+  }, [])
+
+  // Sync URL params → state on mount
+  useEffect(() => {
+    fetchQuotations(page, search, statusFilter, dateRange)
+  }, [page, statusFilter, dateRange])
+
+  const handleSearchChange = (value: string) => {
+    setSearch(value)
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+    searchDebounceRef.current = setTimeout(() => {
+      setPage(1)
+      fetchQuotations(1, value, statusFilter, dateRange)
+      updateURL(value, statusFilter, dateRange)
+    }, 300)
   }
 
+  const handleStatusChange = (value: string) => {
+    const v = value === 'all' ? '' : value
+    setStatusFilter(v)
+    setPage(1)
+    updateURL(search, v, dateRange)
+  }
+
+  const handleDateRangeChange = (value: string) => {
+    const v = value === 'all' ? '' : value
+    setDateRange(v)
+    setPage(1)
+    updateURL(search, statusFilter, v)
+  }
+
+  const updateURL = (q: string, status: string, range: string) => {
+    const params = new URLSearchParams()
+    if (q) params.set('search', q)
+    if (status) params.set('status', status)
+    if (range) params.set('range', range)
+    router.replace(`/quote/history${params.toString() ? '?' + params.toString() : ''}`, { scroll: false })
+  }
+
+  const clearFilters = () => {
+    setSearch('')
+    setStatusFilter('')
+    setDateRange('')
+    setPage(1)
+    router.replace('/quote/history', { scroll: false })
+    fetchQuotations(1, '', '', '')
+  }
+
+  const hasFilters = search || statusFilter || dateRange
   const totalPages = Math.ceil(total / limit)
 
   return (
@@ -61,20 +156,62 @@ export default function QuoteHistoryPage() {
         <span className="text-gray-400 text-sm">共 {total} 条</span>
       </div>
 
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3 items-center">
+        <div className="relative flex-1 min-w-[200px] max-w-xs">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Input
+            className="pl-9 pr-4"
+            placeholder="搜索报价单号或客户名..."
+            value={search}
+            onChange={(e) => handleSearchChange(e.target.value)}
+          />
+        </div>
+        <Select value={statusFilter || 'all'} onValueChange={handleStatusChange}>
+          <SelectTrigger className="w-32">
+            <SelectValue placeholder="全部状态" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部状态</SelectItem>
+            {(Object.entries(STATUS_CONFIG) as [QuoteStatus, typeof STATUS_CONFIG[QuoteStatus]][]).map(([key, cfg]) => (
+              <SelectItem key={key} value={key}>{cfg.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={dateRange || 'all'} onValueChange={handleDateRangeChange}>
+          <SelectTrigger className="w-32">
+            <SelectValue placeholder="全部时间" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部时间</SelectItem>
+            <SelectItem value="month">本月</SelectItem>
+            <SelectItem value="3months">近3个月</SelectItem>
+          </SelectContent>
+        </Select>
+        {hasFilters && (
+          <Button variant="ghost" size="sm" onClick={clearFilters} className="text-gray-500">
+            <X className="w-4 h-4 mr-1" />
+            清除筛选
+          </Button>
+        )}
+      </div>
+
       {loading ? (
         <div className="text-center py-12 text-gray-400">加载中...</div>
       ) : quotations.length === 0 ? (
         <Card>
           <CardContent className="py-16 text-center text-gray-400">
             <FileText className="w-10 h-10 mx-auto mb-3 opacity-30" />
-            <p>暂无报价记录</p>
-            <Button
-              variant="outline"
-              className="mt-4"
-              onClick={() => router.push('/quote')}
-            >
-              去生成报价单
-            </Button>
+            <p>{hasFilters ? '没有符合条件的报价记录' : '暂无报价记录'}</p>
+            {hasFilters ? (
+              <Button variant="outline" className="mt-4" onClick={clearFilters}>
+                清除筛选
+              </Button>
+            ) : (
+              <Button variant="outline" className="mt-4" onClick={() => router.push('/quote')}>
+                去生成报价单
+              </Button>
+            )}
           </CardContent>
         </Card>
       ) : (
@@ -97,6 +234,11 @@ export default function QuoteHistoryPage() {
                         <Badge variant="outline" className="text-xs">
                           {q.trade_term}
                         </Badge>
+                        {q.status && q.status !== 'draft' && (
+                          <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${STATUS_CONFIG[q.status].color}`}>
+                            {STATUS_CONFIG[q.status].label}
+                          </span>
+                        )}
                         <span className="text-xs text-gray-400">
                           {new Date(q.created_at).toLocaleDateString('zh-CN')}
                         </span>

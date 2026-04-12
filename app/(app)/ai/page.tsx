@@ -1,685 +1,242 @@
 'use client'
 
-import { useState } from 'react'
-import { Bot, Loader2, Clipboard, Check, FileSearch, Mail, MessageSquare } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Bot, Sparkles, Send, Loader2, FileSearch, Mail, MessageSquare, User } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
 
-const TRADE_TERMS = ['EXW', 'FCA', 'FAS', 'FOB', 'CFR', 'CPT', 'CIF', 'CIP', 'DAP', 'DPU', 'DDP']
-const CURRENCIES = ['USD', 'EUR', 'GBP']
-
-// ─── Tab 1: 询盘解析 ────────────────────────────────────────────────────────
-
-interface ParsedInquiry {
-  product_name: string | null
-  quantity: number | null
-  unit: string | null
-  specs: string | null
-  trade_term: string | null
-  destination: string | null
-  payment_terms: string | null
-  delivery_deadline: string | null
-  notes: string | null
-  raw_summary: string | null
+interface Message {
+  role: 'user' | 'assistant'
+  content: string
 }
 
-function ParseInquiryTab() {
-  const [emailText, setEmailText] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<ParsedInquiry | null>(null)
+const QUICK_ACTIONS = [
+  {
+    icon: FileSearch,
+    label: '解析询盘',
+    color: 'text-blue-600',
+    bg: 'bg-blue-50 hover:bg-blue-100',
+    prompt: '请帮我解析以下询盘邮件，提取产品名称、数量、规格、贸易术语等关键信息：\n\n',
+  },
+  {
+    icon: Mail,
+    label: '生成报价邮件',
+    color: 'text-green-600',
+    bg: 'bg-green-50 hover:bg-green-100',
+    prompt: '请帮我起草一封专业的英文报价回复邮件。客户信息和报价内容如下：\n\n',
+  },
+  {
+    icon: MessageSquare,
+    label: '议价回复',
+    color: 'text-orange-600',
+    bg: 'bg-orange-50 hover:bg-orange-100',
+    prompt: '客户对我们的报价进行了还价，请帮我生成一封专业的议价回复邮件。客户消息如下：\n\n',
+  },
+  {
+    icon: Sparkles,
+    label: '自由提问',
+    color: 'text-purple-600',
+    bg: 'bg-purple-50 hover:bg-purple-100',
+    prompt: '',
+  },
+]
 
-  const handleParse = async () => {
-    if (!emailText.trim()) {
-      toast.error('请粘贴询盘邮件内容')
-      return
-    }
-    setLoading(true)
-    setResult(null)
+export default function AiPage() {
+  const [messages, setMessages] = useState<Message[]>([])
+  const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [contextInfo, setContextInfo] = useState('')
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    loadContext()
+  }, [])
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  const loadContext = async () => {
     try {
-      const res = await fetch('/api/ai/parse-inquiry', {
+      const [profileRes, productsRes] = await Promise.all([
+        fetch('/api/user-profile'),
+        fetch('/api/products?limit=20'),
+      ])
+      const profile = profileRes.ok ? await profileRes.json() : null
+      const productsData = productsRes.ok ? await productsRes.json() : null
+      const productCount = productsData?.products?.length || 0
+      const company = profile?.company_name || '您的公司'
+      setContextInfo(`${company} · 已加载 ${productCount} 个产品`)
+
+      // Welcome message
+      setMessages([
+        {
+          role: 'assistant',
+          content: `您好！我是 ${company} 的 AI 销售助手 ✨\n\n我已加载您的公司信息和产品目录（${productCount} 个产品），可以帮您：\n\n• **解析询盘邮件** — 自动提取产品、数量、贸易术语等关键信息\n• **起草报价邮件** — 生成专业的英文报价回复\n• **议价回复** — 帮您处理客户还价，维护利润空间\n• **贸易咨询** — 解答关税、Incoterms、付款方式等问题\n\n点击下方快捷指令，或直接输入您的问题开始吧！`,
+        },
+      ])
+    } catch {
+      setContextInfo('加载上下文失败')
+    }
+  }
+
+  const handleSend = async () => {
+    const text = input.trim()
+    if (!text || loading) return
+
+    const userMsg: Message = { role: 'user', content: text }
+    const newMessages = [...messages, userMsg]
+    setMessages(newMessages)
+    setInput('')
+    setLoading(true)
+
+    try {
+      const res = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ emailText }),
+        body: JSON.stringify({
+          messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
+        }),
       })
       const data = await res.json()
-      if (!res.ok || data.error) {
-        toast.error(data.error || '解析失败，请重试')
-        return
-      }
-      setResult(data)
-    } catch {
-      toast.error('网络错误，请重试')
+      if (!res.ok) throw new Error(data.error || '请求失败')
+      setMessages((prev) => [...prev, { role: 'assistant', content: data.reply }])
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : '发送失败，请重试')
+      // Remove the user message on error
+      setMessages((prev) => prev.slice(0, -1))
+      setInput(text)
     } finally {
       setLoading(false)
     }
   }
 
-  const fields: { key: keyof ParsedInquiry; label: string }[] = [
-    { key: 'product_name', label: '产品名称' },
-    { key: 'quantity', label: '数量' },
-    { key: 'unit', label: '单位' },
-    { key: 'specs', label: '规格/要求' },
-    { key: 'trade_term', label: '贸易术语' },
-    { key: 'destination', label: '目的地' },
-    { key: 'payment_terms', label: '付款方式' },
-    { key: 'delivery_deadline', label: '交货期要求' },
-    { key: 'notes', label: '其他备注' },
-  ]
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSend()
+    }
+  }
+
+  const handleQuickAction = (prompt: string) => {
+    setInput(prompt)
+    textareaRef.current?.focus()
+  }
+
+  // Simple markdown-like rendering for bold and line breaks
+  const renderContent = (content: string) => {
+    return content.split('\n').map((line, i) => {
+      const parts = line.split(/\*\*(.*?)\*\*/g)
+      return (
+        <span key={i}>
+          {parts.map((part, j) =>
+            j % 2 === 1 ? <strong key={j}>{part}</strong> : part
+          )}
+          {i < content.split('\n').length - 1 && <br />}
+        </span>
+      )
+    })
+  }
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-3">
-        <label className="text-sm font-medium text-gray-700">粘贴询盘邮件</label>
-        <Textarea
-          placeholder="请将客户发来的询盘邮件内容粘贴至此处..."
-          className="min-h-[200px] resize-y font-mono text-sm"
-          value={emailText}
-          onChange={(e) => setEmailText(e.target.value)}
-        />
-        <Button onClick={handleParse} disabled={loading} className="w-full sm:w-auto">
-          {loading ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              AI 解析中...
-            </>
-          ) : (
-            <>
-              <FileSearch className="mr-2 h-4 w-4" />
-              AI 解析
-            </>
-          )}
+    <div className="flex flex-col h-screen pt-16 md:pt-0">
+      {/* Header */}
+      <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-blue-50 to-indigo-50 flex-shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center">
+            <Bot className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h1 className="font-semibold text-gray-900">AI 销售助手</h1>
+            {contextInfo && <p className="text-xs text-gray-500">{contextInfo}</p>}
+          </div>
+        </div>
+        <Button variant="ghost" size="sm" className="text-xs text-gray-400" onClick={loadContext}>
+          重新加载上下文
         </Button>
       </div>
 
-      {result && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <FileSearch className="h-4 w-4 text-blue-600" />
-              解析结果
-            </CardTitle>
-            {result.raw_summary && (
-              <p className="text-sm text-gray-500 mt-1">{result.raw_summary}</p>
+      {/* Quick Actions */}
+      <div className="flex items-center gap-2 px-4 py-3 border-b bg-white flex-shrink-0 overflow-x-auto">
+        <span className="text-xs text-gray-400 flex-shrink-0">快捷指令：</span>
+        {QUICK_ACTIONS.map((action) => (
+          <button
+            key={action.label}
+            onClick={() => handleQuickAction(action.prompt)}
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium flex-shrink-0 transition-colors',
+              action.bg, action.color
             )}
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {fields.map(({ key, label }) => (
-                <div key={key} className="space-y-1">
-                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                    {label}
-                  </p>
-                  <p className="text-sm font-medium text-gray-900">
-                    {result[key] !== null && result[key] !== undefined
-                      ? String(result[key])
-                      : '—'}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  )
-}
-
-// ─── Tab 2: 邮件回复生成 ──────────────────────────────────────────────────────
-
-interface ReplyResult {
-  email_subject: string
-  email_body: string
-}
-
-function GenerateReplyTab() {
-  const [form, setForm] = useState({
-    product_name: '',
-    quantity: '',
-    unit: '',
-    trade_term: 'FOB',
-    currency: 'USD',
-    unit_price: '',
-    payment_terms: 'T/T 30% deposit, 70% before shipment',
-    delivery_time: '30 days after receipt of deposit',
-    validity_days: '30',
-    customer_company: '',
-    customer_contact: '',
-    my_company: '',
-  })
-  const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<ReplyResult | null>(null)
-  const [copied, setCopied] = useState(false)
-
-  const totalAmount =
-    parseFloat(form.unit_price) && parseFloat(form.quantity)
-      ? (parseFloat(form.unit_price) * parseFloat(form.quantity)).toFixed(2)
-      : ''
-
-  const handleGenerate = async () => {
-    if (!form.product_name || !form.customer_company || !form.my_company) {
-      toast.error('请填写产品名称、客户公司和我方公司名称')
-      return
-    }
-    if (!form.unit_price || !form.quantity) {
-      toast.error('请填写数量和单价')
-      return
-    }
-
-    setLoading(true)
-    setResult(null)
-    try {
-      const res = await fetch('/api/ai/generate-reply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          quotation: {
-            trade_term: form.trade_term,
-            currency: form.currency,
-            products: [
-              {
-                name: form.product_name,
-                quantity: parseFloat(form.quantity),
-                unit: form.unit || 'pcs',
-                unit_price: parseFloat(form.unit_price),
-              },
-            ],
-            total_amount_foreign: parseFloat(totalAmount || '0'),
-            payment_terms: form.payment_terms,
-            delivery_time: form.delivery_time,
-            validity_days: parseInt(form.validity_days) || 30,
-          },
-          customer: {
-            company_name: form.customer_company,
-            contact_name: form.customer_contact,
-          },
-          company_name: form.my_company,
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok || data.error) {
-        toast.error(data.error || '生成失败，请重试')
-        return
-      }
-      setResult(data)
-    } catch {
-      toast.error('网络错误，请重试')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleCopy = async () => {
-    if (!result) return
-    const text = `Subject: ${result.email_subject}\n\n${result.email_body}`
-    await navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
-
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <label className="text-sm font-medium text-gray-700">产品名称 *</label>
-          <Input
-            placeholder="如：LED Flood Light 100W"
-            value={form.product_name}
-            onChange={(e) => setForm({ ...form, product_name: e.target.value })}
-          />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">数量 *</label>
-            <Input
-              type="number"
-              placeholder="1000"
-              value={form.quantity}
-              onChange={(e) => setForm({ ...form, quantity: e.target.value })}
-            />
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">单位</label>
-            <Input
-              placeholder="pcs"
-              value={form.unit}
-              onChange={(e) => setForm({ ...form, unit: e.target.value })}
-            />
-          </div>
-        </div>
-
-        <div className="space-y-2">
-          <label className="text-sm font-medium text-gray-700">贸易术语</label>
-          <Select
-            value={form.trade_term}
-            onValueChange={(v) => setForm({ ...form, trade_term: v || form.trade_term })}
           >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {TRADE_TERMS.map((t) => (
-                <SelectItem key={t} value={t}>
-                  {t}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+            <action.icon className="w-3.5 h-3.5" />
+            {action.label}
+          </button>
+        ))}
+      </div>
 
-        <div className="grid grid-cols-2 gap-2">
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">币种</label>
-            <Select
-              value={form.currency}
-              onValueChange={(v) => setForm({ ...form, currency: v || form.currency })}
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
+        {messages.map((msg, i) => (
+          <div key={i} className={cn('flex gap-3', msg.role === 'user' ? 'justify-end' : 'justify-start')}>
+            {msg.role === 'assistant' && (
+              <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <Sparkles className="w-4 h-4 text-white" />
+              </div>
+            )}
+            <div
+              className={cn(
+                'max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed',
+                msg.role === 'user'
+                  ? 'bg-blue-600 text-white rounded-br-sm'
+                  : 'bg-white border border-gray-100 text-gray-800 rounded-bl-sm shadow-sm'
+              )}
             >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {CURRENCIES.map((c) => (
-                  <SelectItem key={c} value={c}>
-                    {c}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              {renderContent(msg.content)}
+            </div>
+            {msg.role === 'user' && (
+              <div className="w-8 h-8 rounded-lg bg-gray-200 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <User className="w-4 h-4 text-gray-500" />
+              </div>
+            )}
           </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">单价 *</label>
-            <Input
-              type="number"
-              placeholder="12.50"
-              value={form.unit_price}
-              onChange={(e) => setForm({ ...form, unit_price: e.target.value })}
-            />
-          </div>
-        </div>
+        ))}
 
-        {totalAmount && (
-          <div className="sm:col-span-2 bg-blue-50 border border-blue-100 rounded-lg px-4 py-2 text-sm">
-            <span className="text-gray-500">总金额：</span>
-            <span className="font-semibold text-blue-700">
-              {form.currency} {totalAmount}
-            </span>
+        {loading && (
+          <div className="flex gap-3 justify-start">
+            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <Sparkles className="w-4 h-4 text-white" />
+            </div>
+            <div className="bg-white border border-gray-100 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
+              <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+            </div>
           </div>
         )}
-
-        <div className="space-y-2">
-          <label className="text-sm font-medium text-gray-700">付款方式</label>
-          <Input
-            placeholder="T/T 30% deposit, 70% before shipment"
-            value={form.payment_terms}
-            onChange={(e) => setForm({ ...form, payment_terms: e.target.value })}
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium text-gray-700">交货期</label>
-          <Input
-            placeholder="30 days after receipt of deposit"
-            value={form.delivery_time}
-            onChange={(e) => setForm({ ...form, delivery_time: e.target.value })}
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium text-gray-700">报价有效期（天）</label>
-          <Input
-            type="number"
-            placeholder="30"
-            value={form.validity_days}
-            onChange={(e) => setForm({ ...form, validity_days: e.target.value })}
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium text-gray-700">客户公司名称 *</label>
-          <Input
-            placeholder="ABC Trading Co., Ltd."
-            value={form.customer_company}
-            onChange={(e) => setForm({ ...form, customer_company: e.target.value })}
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium text-gray-700">客户联系人</label>
-          <Input
-            placeholder="John Smith（可选）"
-            value={form.customer_contact}
-            onChange={(e) => setForm({ ...form, customer_contact: e.target.value })}
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium text-gray-700">我方公司名称 *</label>
-          <Input
-            placeholder="Your Company Name"
-            value={form.my_company}
-            onChange={(e) => setForm({ ...form, my_company: e.target.value })}
-          />
-        </div>
+        <div ref={messagesEndRef} />
       </div>
 
-      <Button onClick={handleGenerate} disabled={loading} className="w-full sm:w-auto">
-        {loading ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            生成中...
-          </>
-        ) : (
-          <>
-            <Mail className="mr-2 h-4 w-4" />
-            生成邮件
-          </>
-        )}
-      </Button>
-
-      {result && (
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Mail className="h-4 w-4 text-blue-600" />
-                生成的报价邮件
-              </CardTitle>
-              <Button variant="outline" size="sm" onClick={handleCopy}>
-                {copied ? (
-                  <>
-                    <Check className="mr-1.5 h-3.5 w-3.5 text-green-600" />
-                    已复制
-                  </>
-                ) : (
-                  <>
-                    <Clipboard className="mr-1.5 h-3.5 w-3.5" />
-                    复制
-                  </>
-                )}
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">主题</p>
-              <p className="text-sm font-medium text-gray-900 bg-gray-50 rounded px-3 py-2">
-                {result.email_subject}
-              </p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">正文</p>
-              <pre className="text-sm text-gray-900 bg-gray-50 rounded px-3 py-3 whitespace-pre-wrap font-sans leading-relaxed">
-                {result.email_body}
-              </pre>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  )
-}
-
-// ─── Tab 3: 议价助手 ──────────────────────────────────────────────────────────
-
-function NegotiateTab() {
-  const [form, setForm] = useState({
-    customer_message: '',
-    product_name: '',
-    quoted_price: '',
-    currency: 'USD',
-    min_price: '',
-    context: '',
-  })
-  const [loading, setLoading] = useState(false)
-  const [reply, setReply] = useState('')
-  const [copied, setCopied] = useState(false)
-
-  const handleGenerate = async () => {
-    if (!form.customer_message.trim() || !form.product_name || !form.quoted_price) {
-      toast.error('请填写客户消息、产品名称和报价')
-      return
-    }
-
-    setLoading(true)
-    setReply('')
-    try {
-      const res = await fetch('/api/ai/negotiate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customer_message: form.customer_message,
-          product_name: form.product_name,
-          quoted_price: parseFloat(form.quoted_price),
-          currency: form.currency,
-          min_price: form.min_price ? parseFloat(form.min_price) : undefined,
-          context: form.context || undefined,
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok || data.error) {
-        toast.error(data.error || '生成失败，请重试')
-        return
-      }
-      setReply(data.reply)
-    } catch {
-      toast.error('网络错误，请重试')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleCopy = async () => {
-    await navigator.clipboard.writeText(reply)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
-
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="sm:col-span-2 space-y-2">
-          <label className="text-sm font-medium text-gray-700">客户还价消息 *</label>
+      {/* Input */}
+      <div className="flex-shrink-0 border-t bg-white px-4 py-4">
+        <div className="flex gap-2 items-end max-w-4xl mx-auto">
           <Textarea
-            placeholder="粘贴客户发来的还价或压价邮件内容..."
-            className="min-h-[120px] resize-y"
-            value={form.customer_message}
-            onChange={(e) => setForm({ ...form, customer_message: e.target.value })}
+            ref={textareaRef}
+            placeholder="输入消息... (Enter 发送，Shift+Enter 换行)"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            rows={1}
+            className="resize-none flex-1 text-sm min-h-[40px] max-h-[160px]"
+            style={{ overflowY: input.split('\n').length > 4 ? 'auto' : 'hidden' }}
+            disabled={loading}
           />
+          <Button onClick={handleSend} disabled={loading || !input.trim()} size="sm" className="h-10 px-4">
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+          </Button>
         </div>
-
-        <div className="space-y-2">
-          <label className="text-sm font-medium text-gray-700">产品名称 *</label>
-          <Input
-            placeholder="如：LED Flood Light 100W"
-            value={form.product_name}
-            onChange={(e) => setForm({ ...form, product_name: e.target.value })}
-          />
-        </div>
-
-        <div className="grid grid-cols-3 gap-2">
-          <div className="space-y-2 col-span-2">
-            <label className="text-sm font-medium text-gray-700">我方报价单价 *</label>
-            <Input
-              type="number"
-              placeholder="12.50"
-              value={form.quoted_price}
-              onChange={(e) => setForm({ ...form, quoted_price: e.target.value })}
-            />
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">币种</label>
-            <Select
-              value={form.currency}
-              onValueChange={(v) => setForm({ ...form, currency: v || form.currency })}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {CURRENCIES.map((c) => (
-                  <SelectItem key={c} value={c}>
-                    {c}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        <div className="space-y-2">
-          <label className="text-sm font-medium text-gray-700">
-            最低可接受单价（可选）
-          </label>
-          <Input
-            type="number"
-            placeholder="10.00"
-            value={form.min_price}
-            onChange={(e) => setForm({ ...form, min_price: e.target.value })}
-          />
-        </div>
-
-        <div className="sm:col-span-2 space-y-2">
-          <label className="text-sm font-medium text-gray-700">
-            补充背景（可选）
-          </label>
-          <Textarea
-            placeholder="如：该客户是重要客户、上次成交价为X等"
-            className="min-h-[80px] resize-y"
-            value={form.context}
-            onChange={(e) => setForm({ ...form, context: e.target.value })}
-          />
-        </div>
+        <p className="text-center text-xs text-gray-400 mt-2">AI 助手可能出现错误，请核实重要信息</p>
       </div>
-
-      <Button onClick={handleGenerate} disabled={loading} className="w-full sm:w-auto">
-        {loading ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            生成中...
-          </>
-        ) : (
-          <>
-            <MessageSquare className="mr-2 h-4 w-4" />
-            生成回复
-          </>
-        )}
-      </Button>
-
-      {reply && (
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base flex items-center gap-2">
-                <MessageSquare className="h-4 w-4 text-blue-600" />
-                议价回复草稿
-              </CardTitle>
-              <Button variant="outline" size="sm" onClick={handleCopy}>
-                {copied ? (
-                  <>
-                    <Check className="mr-1.5 h-3.5 w-3.5 text-green-600" />
-                    已复制
-                  </>
-                ) : (
-                  <>
-                    <Clipboard className="mr-1.5 h-3.5 w-3.5" />
-                    复制
-                  </>
-                )}
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <Textarea
-              className="min-h-[280px] font-sans text-sm leading-relaxed resize-y"
-              value={reply}
-              onChange={(e) => setReply(e.target.value)}
-            />
-            <p className="text-xs text-gray-400 mt-2">可在上方直接编辑后再复制发送</p>
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  )
-}
-
-// ─── Main Page ────────────────────────────────────────────────────────────────
-
-export default function AIPage() {
-  return (
-    <div className="p-8 pt-16 md:pt-8 space-y-6">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <Bot className="w-6 h-6 text-blue-600" />
-        <div>
-          <h1 className="text-2xl font-bold">AI 助手</h1>
-          <p className="text-sm text-gray-500">智能解析询盘、生成报价邮件、辅助价格谈判</p>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <Tabs defaultValue="parse">
-        <TabsList className="mb-2">
-          <TabsTrigger value="parse">
-            <FileSearch className="w-4 h-4 mr-1.5" />
-            询盘解析
-          </TabsTrigger>
-          <TabsTrigger value="reply">
-            <Mail className="w-4 h-4 mr-1.5" />
-            邮件回复
-          </TabsTrigger>
-          <TabsTrigger value="negotiate">
-            <MessageSquare className="w-4 h-4 mr-1.5" />
-            议价助手
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="parse">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">AI 询盘解析</CardTitle>
-              <p className="text-sm text-gray-500">
-                将客户发来的询盘邮件粘贴到下方，AI 将自动提取关键信息
-              </p>
-            </CardHeader>
-            <CardContent>
-              <ParseInquiryTab />
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="reply">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">AI 邮件回复生成</CardTitle>
-              <p className="text-sm text-gray-500">
-                填写报价信息，AI 自动生成专业英文报价回复邮件
-              </p>
-            </CardHeader>
-            <CardContent>
-              <GenerateReplyTab />
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="negotiate">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">AI 议价助手</CardTitle>
-              <p className="text-sm text-gray-500">
-                粘贴客户的还价消息，AI 帮您生成得体的英文议价回复
-              </p>
-            </CardHeader>
-            <CardContent>
-              <NegotiateTab />
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
     </div>
   )
 }

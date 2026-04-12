@@ -131,6 +131,26 @@ const styles = StyleSheet.create({
     padding: 10,
     backgroundColor: '#f9f9f9',
   },
+  bankSection: {
+    marginBottom: 20,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 4,
+  },
+  bankRow: {
+    flexDirection: 'row',
+    marginBottom: 3,
+  },
+  bankLabel: {
+    width: 100,
+    fontSize: 9,
+    color: '#666',
+  },
+  bankValue: {
+    flex: 1,
+    fontSize: 9,
+  },
   footer: {
     position: 'absolute',
     bottom: 40,
@@ -175,6 +195,10 @@ interface QuotationPDFProps {
   email?: string
   website?: string
   logoUrl?: string
+  bankName?: string
+  bankAccount?: string
+  bankSwift?: string
+  bankBeneficiary?: string
   clientName: string
   clientContact?: string
   clientAddress?: string
@@ -200,6 +224,10 @@ export function QuotationPDF({
   email,
   website,
   logoUrl,
+  bankName,
+  bankAccount,
+  bankSwift,
+  bankBeneficiary,
   clientName,
   clientContact,
   clientAddress,
@@ -216,7 +244,10 @@ export function QuotationPDF({
   remarks,
   type = 'QUOTATION',
 }: QuotationPDFProps) {
-  const currencySymbol = currency === 'USD' ? '$' : currency === 'EUR' ? '€' : '£'
+  const SYMBOL_MAP: Record<string, string> = {
+    USD: '$', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$', AED: 'AED ', SGD: 'S$',
+  }
+  const currencySymbol = SYMBOL_MAP[currency] || currency + ' '
 
   const formatPrice = (price: number) => {
     return `${currencySymbol}${price.toFixed(2)}`
@@ -333,6 +364,39 @@ export function QuotationPDF({
           <View style={styles.notesSection}>
             <Text style={styles.sectionTitle}>Remarks:</Text>
             <Text>{remarks}</Text>
+          </View>
+        )}
+
+        {/* Bank Info */}
+        {(bankName || bankAccount) && (
+          <View style={styles.bankSection}>
+            <Text style={[styles.sectionTitle, { fontSize: 10, marginBottom: 6 }]}>
+              Banking Information:
+            </Text>
+            {bankBeneficiary && (
+              <View style={styles.bankRow}>
+                <Text style={styles.bankLabel}>Beneficiary:</Text>
+                <Text style={styles.bankValue}>{bankBeneficiary}</Text>
+              </View>
+            )}
+            {bankName && (
+              <View style={styles.bankRow}>
+                <Text style={styles.bankLabel}>Bank Name:</Text>
+                <Text style={styles.bankValue}>{bankName}</Text>
+              </View>
+            )}
+            {bankAccount && (
+              <View style={styles.bankRow}>
+                <Text style={styles.bankLabel}>Account No.:</Text>
+                <Text style={styles.bankValue}>{bankAccount}</Text>
+              </View>
+            )}
+            {bankSwift && (
+              <View style={styles.bankRow}>
+                <Text style={styles.bankLabel}>SWIFT/BIC:</Text>
+                <Text style={styles.bankValue}>{bankSwift}</Text>
+              </View>
+            )}
           </View>
         )}
 

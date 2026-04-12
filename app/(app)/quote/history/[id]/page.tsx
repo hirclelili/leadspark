@@ -4,13 +4,30 @@ import React, { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
-  ArrowLeft, Download, Building, Loader2, FileText, Calendar,
-  CreditCard, Package, Truck, Hash
+  ArrowLeft, Download, Building, Loader2, FileText,
+  CreditCard, Package, Truck, Hash, Copy, ChevronDown, Send, Sparkles, ClipboardCopy
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { toast } from 'sonner'
+import { AiSidePanel } from '@/components/AiSidePanel'
+
+const STATUS_CONFIG = {
+  draft:       { label: '草稿',   color: 'bg-gray-100 text-gray-600' },
+  sent:        { label: '已发送', color: 'bg-blue-100 text-blue-700' },
+  negotiating: { label: '议价中', color: 'bg-yellow-100 text-yellow-700' },
+  won:         { label: '已成交', color: 'bg-green-100 text-green-700' },
+  lost:        { label: '已流失', color: 'bg-red-100 text-red-600' },
+} as const
+type QuoteStatus = keyof typeof STATUS_CONFIG
 
 interface QuotationDetail {
   id: string
@@ -26,6 +43,7 @@ interface QuotationDetail {
   packing: string | null
   remarks: string | null
   created_at: string
+  status?: QuoteStatus
   products: Array<{
     name: string
     model?: string
@@ -52,7 +70,9 @@ interface QuotationDetail {
   customer_id: string | null
 }
 
-const CURRENCY_SYMBOL: Record<string, string> = { USD: '$', EUR: '€', GBP: '£' }
+const CURRENCY_SYMBOL: Record<string, string> = {
+  USD: '$', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$', AED: 'AED ', SGD: 'S$',
+}
 
 export default function QuotationDetailPage() {
   const router = useRouter()
@@ -62,6 +82,134 @@ export default function QuotationDetailPage() {
   const [quotation, setQuotation] = useState<QuotationDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
+  const [updatingStatus, setUpdatingStatus] = useState(false)
+  const [sendingEmail, setSendingEmail] = useState(false)
+
+  // AI side panel
+  const [aiPanelOpen, setAiPanelOpen] = useState(false)
+  const [aiGenerating, setAiGenerating] = useState(false)
+  const [aiEmailResult, setAiEmailResult] = useState<{ subject: string; body: string } | null>(null)
+
+  const handleGenerateReply = async (q: QuotationDetail) => {
+    setAiGenerating(true)
+    setAiEmailResult(null)
+    try {
+      // Fetch company name from profile
+      let companyName = ''
+      try {
+        const pr = await fetch('/api/user-profile')
+        const p = await pr.json()
+        companyName = p?.company_name || ''
+      } catch { /* ignore */ }
+
+      const res = await fetch('/api/ai/generate-reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          quotation: {
+            quotation_number: q.quotation_number,
+            trade_term: q.trade_term,
+            currency: q.currency,
+            products: q.products.map((p) => ({
+              name: p.name,
+              quantity: p.qty,
+              unit: p.unit,
+              unit_price: p.unit_price_foreign,
+            })),
+            total_amount_foreign: q.total_amount_foreign,
+            payment_terms: q.payment_terms,
+            delivery_time: q.delivery_time,
+            validity_days: q.validity_days,
+          },
+          customer: {
+            company_name: q.customers?.company_name || '',
+            contact_name: q.customers?.contact_name || undefined,
+          },
+          company_name: companyName,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || '生成失败')
+      setAiEmailResult({ subject: data.email_subject || '', body: data.email_body || '' })
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : '生成失败，请重试')
+    } finally {
+      setAiGenerating(false)
+    }
+  }
+
+  const handleSendEmail = async () => {
+    if (!quotation) return
+    setSendingEmail(true)
+    try {
+      const res = await fetch(`/api/quotations/${quotation.id}/send-email`, {
+        method: 'POST',
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) {
+        toast.error(data.error || '发送失败')
+        return
+      }
+      toast.success(`邮件已发送至 ${data.to}`)
+      setQuotation((prev) => prev ? { ...prev, status: 'sent' } : prev)
+    } catch {
+      toast.error('发送失败，请检查网络')
+    } finally {
+      setSendingEmail(false)
+    }
+  }
+
+  const handleStatusChange = async (status: QuoteStatus) => {
+    if (!quotation) return
+    setUpdatingStatus(true)
+    try {
+      const res = await fetch(`/api/quotations/${quotation.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+      const data = await res.json()
+      if (data.error) { toast.error(data.error); return }
+      setQuotation((prev) => prev ? { ...prev, status } : prev)
+      toast.success(`状态已更新为「${STATUS_CONFIG[status].label}」`)
+    } catch {
+      toast.error('更新失败')
+    } finally {
+      setUpdatingStatus(false)
+    }
+  }
+
+  const handleDuplicate = () => {
+    if (!quotation) return
+    const draft = {
+      calcProducts: quotation.products.map((p) => ({
+        id: crypto.randomUUID(),
+        name: p.name,
+        model: p.model || '',
+        unit: p.unit,
+        costPrice: String(p.cost_price || ''),
+        quantity: String(p.qty),
+      })),
+      formData: {
+        domesticCost: String(quotation.costs.domestic_cost || 0),
+        freight: String(quotation.costs.freight || 0),
+        destinationCost: String(quotation.costs.destination_cost || 0),
+        insuranceRate: String(quotation.costs.insurance_rate || 0.3),
+        profitRate: String(quotation.costs.profit_rate || 10),
+        currency: quotation.currency,
+      },
+      quoteDetails: {
+        tradeTerm: quotation.trade_term,
+        paymentTerms: quotation.payment_terms,
+        deliveryTime: quotation.delivery_time,
+        packing: quotation.packing || '',
+        remarks: quotation.remarks || '',
+        validityDays: quotation.validity_days,
+      },
+    }
+    localStorage.setItem('leadspark_quote_draft', JSON.stringify(draft))
+    router.push('/quote')
+  }
 
   useEffect(() => {
     if (id) fetchQuotation()
@@ -107,6 +255,10 @@ export default function QuotationDetailPage() {
         email: profile?.email,
         website: profile?.website,
         logoUrl: profile?.logo_url,
+        bankName: profile?.bank_name,
+        bankAccount: profile?.bank_account,
+        bankSwift: profile?.bank_swift,
+        bankBeneficiary: profile?.bank_beneficiary,
         clientName: quotation.customers?.company_name || '—',
         clientContact: quotation.customers?.contact_name || undefined,
         quotationNumber: quotation.quotation_number,
@@ -170,14 +322,34 @@ export default function QuotationDetailPage() {
             报价历史
           </Button>
         </div>
-        <Button onClick={handleRedownload} disabled={downloading}>
-          {downloading ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <Download className="mr-2 h-4 w-4" />
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => { setAiEmailResult(null); setAiPanelOpen(true); handleGenerateReply(quotation) }}>
+            <Sparkles className="mr-1.5 h-4 w-4 text-blue-500" />
+            AI 生成回复邮件
+          </Button>
+          <Button variant="outline" onClick={handleDuplicate}>
+            <Copy className="mr-2 h-4 w-4" />
+            复用此报价
+          </Button>
+          {quotation.customers?.email && (
+            <Button variant="outline" onClick={handleSendEmail} disabled={sendingEmail}>
+              {sendingEmail ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="mr-2 h-4 w-4" />
+              )}
+              发送给客户
+            </Button>
           )}
-          重新下载 PDF
-        </Button>
+          <Button onClick={handleRedownload} disabled={downloading}>
+            {downloading ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="mr-2 h-4 w-4" />
+            )}
+            重新下载 PDF
+          </Button>
+        </div>
       </div>
 
       {/* Quote number + meta */}
@@ -190,9 +362,39 @@ export default function QuotationDetailPage() {
             })}
           </p>
         </div>
-        <Badge variant="outline" className="text-sm px-3 py-1">
-          {quotation.trade_term}
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="text-sm px-3 py-1">
+            {quotation.trade_term}
+          </Badge>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={updatingStatus}
+                className={`text-xs font-medium ${STATUS_CONFIG[quotation.status || 'draft'].color} border-0`}
+              >
+                {updatingStatus ? (
+                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                ) : null}
+                {STATUS_CONFIG[quotation.status || 'draft'].label}
+                <ChevronDown className="ml-1 h-3 w-3" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {(Object.entries(STATUS_CONFIG) as [QuoteStatus, typeof STATUS_CONFIG[QuoteStatus]][]).map(([key, cfg]) => (
+                <DropdownMenuItem
+                  key={key}
+                  onClick={() => handleStatusChange(key)}
+                  className={key === (quotation.status || 'draft') ? 'font-bold' : ''}
+                >
+                  <span className={`inline-block w-2 h-2 rounded-full mr-2 ${cfg.color.split(' ')[0]}`} />
+                  {cfg.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -392,6 +594,85 @@ export default function QuotationDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* AI 生成回复邮件侧边面板 */}
+      <AiSidePanel
+        open={aiPanelOpen}
+        onClose={() => setAiPanelOpen(false)}
+        title="AI 生成回复邮件"
+      >
+        <div className="p-5 space-y-4">
+          <p className="text-sm text-gray-500">基于当前报价单自动生成专业的英文报价回复邮件。</p>
+
+          {aiGenerating && (
+            <div className="flex items-center justify-center py-12 text-gray-400">
+              <Loader2 className="w-6 h-6 animate-spin mr-2" />
+              <span className="text-sm">AI 生成中...</span>
+            </div>
+          )}
+
+          {!aiGenerating && !aiEmailResult && (
+            <Button className="w-full" onClick={() => handleGenerateReply(quotation)}>
+              <Sparkles className="mr-2 h-4 w-4" />
+              生成邮件
+            </Button>
+          )}
+
+          {aiEmailResult && (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium">邮件主题</label>
+                  <button
+                    className="text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
+                    onClick={() => { navigator.clipboard.writeText(aiEmailResult.subject); toast.success('已复制主题') }}
+                  >
+                    <ClipboardCopy className="w-3 h-3" />复制
+                  </button>
+                </div>
+                <div className="bg-gray-50 rounded-md p-3 text-sm font-medium border">{aiEmailResult.subject}</div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium">邮件正文</label>
+                  <button
+                    className="text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
+                    onClick={() => { navigator.clipboard.writeText(aiEmailResult.body); toast.success('已复制正文') }}
+                  >
+                    <ClipboardCopy className="w-3 h-3" />复制
+                  </button>
+                </div>
+                <Textarea
+                  value={aiEmailResult.body}
+                  onChange={(e) => setAiEmailResult((prev) => prev ? { ...prev, body: e.target.value } : prev)}
+                  rows={16}
+                  className="text-sm font-mono resize-none"
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => { navigator.clipboard.writeText(`Subject: ${aiEmailResult.subject}\n\n${aiEmailResult.body}`); toast.success('已复制全部') }}
+                >
+                  <ClipboardCopy className="mr-2 h-4 w-4" />
+                  复制全部
+                </Button>
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => { setAiEmailResult(null); handleGenerateReply(quotation) }}
+                  disabled={aiGenerating}
+                >
+                  重新生成
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </AiSidePanel>
     </div>
   )
 }

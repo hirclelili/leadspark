@@ -1,8 +1,9 @@
 'use client'
 
 import React, { useState, useEffect, useMemo } from 'react'
-import { Calculator, ChevronDown, ChevronUp, Loader2, RefreshCw, FileText, Search, ArrowLeft, Plus, X, Package } from 'lucide-react'
+import { Calculator, ChevronDown, ChevronUp, Loader2, RefreshCw, FileText, Search, ArrowLeft, Plus, X, Package, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
+import { AiSidePanel } from '@/components/AiSidePanel'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -40,6 +41,11 @@ const currencies = [
   { value: 'USD', label: 'USD - 美元' },
   { value: 'EUR', label: 'EUR - 欧元' },
   { value: 'GBP', label: 'GBP - 英镑' },
+  { value: 'JPY', label: 'JPY - 日元' },
+  { value: 'AUD', label: 'AUD - 澳元' },
+  { value: 'CAD', label: 'CAD - 加元' },
+  { value: 'AED', label: 'AED - 迪拉姆' },
+  { value: 'SGD', label: 'SGD - 新加坡元' },
 ]
 
 const PAYMENT_TERMS_OPTIONS = [
@@ -114,6 +120,10 @@ interface UserProfile {
   website?: string
   default_payment_terms?: string
   default_validity?: number
+  bank_name?: string
+  bank_account?: string
+  bank_swift?: string
+  bank_beneficiary?: string
 }
 
 // ── Pure calculation functions ────────────────────────────────────────────────
@@ -282,6 +292,12 @@ export default function QuotePage() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   const [pdfProducts, setPdfProducts] = useState<PDFProductRow[]>([])
 
+  // ── AI Side Panel state
+  const [aiPanelOpen, setAiPanelOpen] = useState(false)
+  const [inquiryText, setInquiryText] = useState('')
+  const [inquiryParsing, setInquiryParsing] = useState(false)
+  const [inquiryResult, setInquiryResult] = useState<Record<string, unknown> | null>(null)
+
   // ── Computed values
   const multiResults = useMemo(() => {
     const valid = calcProducts
@@ -323,7 +339,43 @@ export default function QuotePage() {
   useEffect(() => {
     fetchLibraryProducts()
     fetchExchangeRate()
+
+    // Load draft from "复用此报价" or localStorage auto-save
+    const draftJson = localStorage.getItem('leadspark_quote_draft')
+    if (draftJson) {
+      try {
+        const draft = JSON.parse(draftJson)
+        if (draft.calcProducts) setCalcProducts(draft.calcProducts)
+        if (draft.formData) setFormData((prev) => ({ ...prev, ...draft.formData }))
+        if (draft.quoteDetails) setQuoteDetails((prev) => ({ ...prev, ...draft.quoteDetails }))
+        localStorage.removeItem('leadspark_quote_draft')
+      } catch { /* ignore */ }
+    } else {
+      // Restore auto-saved calculator params (but not when loading a draft)
+      const savedParams = localStorage.getItem('leadspark_calc_params')
+      if (savedParams) {
+        try {
+          const params = JSON.parse(savedParams)
+          setFormData((prev) => ({ ...prev, ...params }))
+        } catch { /* ignore */ }
+      }
+      const savedProducts = localStorage.getItem('leadspark_calc_products')
+      if (savedProducts) {
+        try {
+          setCalcProducts(JSON.parse(savedProducts))
+        } catch { /* ignore */ }
+      }
+    }
   }, [])
+
+  // Auto-save calculator params to localStorage
+  useEffect(() => {
+    localStorage.setItem('leadspark_calc_params', JSON.stringify(formData))
+  }, [formData])
+
+  useEffect(() => {
+    localStorage.setItem('leadspark_calc_products', JSON.stringify(calcProducts))
+  }, [calcProducts])
 
   // Search customers with debounce
   useEffect(() => {
@@ -589,6 +641,10 @@ export default function QuotePage() {
         email: userProfile?.email,
         website: userProfile?.website,
         logoUrl: userProfile?.logo_url,
+        bankName: userProfile?.bank_name,
+        bankAccount: userProfile?.bank_account,
+        bankSwift: userProfile?.bank_swift,
+        bankBeneficiary: userProfile?.bank_beneficiary,
         clientName: customerName,
         clientContact: customerContact || undefined,
         clientAddress: customerAddress || undefined,
@@ -649,6 +705,10 @@ export default function QuotePage() {
         email: userProfile?.email,
         website: userProfile?.website,
         logoUrl: userProfile?.logo_url,
+        bankName: userProfile?.bank_name,
+        bankAccount: userProfile?.bank_account,
+        bankSwift: userProfile?.bank_swift,
+        bankBeneficiary: userProfile?.bank_beneficiary,
         clientName: customerName,
         clientContact: customerContact || undefined,
         clientAddress: customerAddress || undefined,
@@ -677,15 +737,70 @@ export default function QuotePage() {
     }
   }
 
+  const handleParseInquiry = async () => {
+    if (!inquiryText.trim()) { toast.error('请粘贴询盘邮件内容'); return }
+    setInquiryParsing(true)
+    setInquiryResult(null)
+    try {
+      const res = await fetch('/api/ai/parse-inquiry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emailText: inquiryText }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || '解析失败')
+      setInquiryResult(data)
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : '解析失败，请重试')
+    } finally {
+      setInquiryParsing(false)
+    }
+  }
+
+  const handleFillFromInquiry = () => {
+    if (!inquiryResult) return
+    const r = inquiryResult
+    setCalcProducts((prev) => {
+      const updated = [...prev]
+      if (updated.length > 0) {
+        updated[0] = {
+          ...updated[0],
+          name: (r.product_name as string) || updated[0].name,
+          quantity: r.quantity != null ? String(r.quantity) : updated[0].quantity,
+          unit: (r.unit as string) || updated[0].unit,
+        }
+      }
+      return updated
+    })
+    if (r.trade_term) {
+      const term = String(r.trade_term).toUpperCase()
+      const valid = TRADE_TERMS.map((t) => t.code)
+      if (valid.includes(term)) {
+        setQuoteDetails((prev) => ({ ...prev, tradeTerm: term }))
+      }
+    }
+    if (r.payment_terms) {
+      setQuoteDetails((prev) => ({ ...prev, paymentTerms: String(r.payment_terms) }))
+    }
+    toast.success('已填入计算器')
+    setAiPanelOpen(false)
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   const sym = getCurrencySymbol(formData.currency)
 
   return (
     <div className="p-8 pt-16 md:pt-8 space-y-6">
-      <div className="flex items-center gap-3">
-        <Calculator className="w-6 h-6" />
-        <h1 className="text-2xl font-bold">报价计算器</h1>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Calculator className="w-6 h-6" />
+          <h1 className="text-2xl font-bold">报价计算器</h1>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => setAiPanelOpen(true)}>
+          <Sparkles className="mr-1.5 h-4 w-4 text-blue-500" />
+          AI 解析询盘
+        </Button>
       </div>
 
       {/* Exchange Rate */}
@@ -1341,6 +1456,64 @@ export default function QuotePage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* AI 解析询盘侧边面板 */}
+      <AiSidePanel
+        open={aiPanelOpen}
+        onClose={() => setAiPanelOpen(false)}
+        title="AI 解析询盘"
+      >
+        <div className="p-5 space-y-4">
+          <p className="text-sm text-gray-500">粘贴客户询盘邮件，AI 自动提取产品、数量、贸易术语等关键信息，一键填入计算器。</p>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium">询盘邮件内容</label>
+            <Textarea
+              placeholder="粘贴英文或中文询盘邮件..."
+              rows={8}
+              value={inquiryText}
+              onChange={(e) => setInquiryText(e.target.value)}
+              className="resize-none text-sm"
+            />
+          </div>
+
+          <Button className="w-full" onClick={handleParseInquiry} disabled={inquiryParsing}>
+            {inquiryParsing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+            AI 解析
+          </Button>
+
+          {inquiryResult && (
+            <div className="space-y-3">
+              <div className="bg-blue-50 rounded-lg p-4 text-sm space-y-2">
+                {!!inquiryResult.raw_summary && (
+                  <p className="text-gray-600 text-xs border-b pb-2 mb-2">{String(inquiryResult.raw_summary)}</p>
+                )}
+                {[
+                  { label: '产品', key: 'product_name' },
+                  { label: '数量', key: 'quantity', suffix: inquiryResult.unit ? ` ${String(inquiryResult.unit)}` : '' },
+                  { label: '规格', key: 'specs' },
+                  { label: '贸易术语', key: 'trade_term' },
+                  { label: '目的地', key: 'destination' },
+                  { label: '付款方式', key: 'payment_terms' },
+                  { label: '交货要求', key: 'delivery_deadline' },
+                  { label: '备注', key: 'notes' },
+                ].map(({ label, key, suffix }) =>
+                  inquiryResult[key] != null ? (
+                    <div key={key} className="flex gap-2">
+                      <span className="text-gray-400 w-20 flex-shrink-0">{label}</span>
+                      <span className="text-gray-800 font-medium">{String(inquiryResult[key])}{suffix || ''}</span>
+                    </div>
+                  ) : null
+                )}
+              </div>
+
+              <Button variant="outline" className="w-full" onClick={handleFillFromInquiry}>
+                填入计算器
+              </Button>
+            </div>
+          )}
+        </div>
+      </AiSidePanel>
     </div>
   )
 }

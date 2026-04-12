@@ -61,7 +61,10 @@ export async function POST(request: Request) {
       })
     }
     // Hard-coded fallback rates
-    const fallback: Record<string, number> = { USD: 0.1380, EUR: 0.1270, GBP: 0.1090 }
+    const fallback: Record<string, number> = {
+      USD: 0.1380, EUR: 0.1270, GBP: 0.1090,
+      JPY: 20.80, AUD: 0.2140, CAD: 0.1900, AED: 0.5070, SGD: 0.1860,
+    }
     return NextResponse.json({
       rate: fallback[targetCurrency] ?? 0.138,
       from: 'CNY',

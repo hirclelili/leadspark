@@ -45,6 +45,47 @@ export default async function DashboardPage() {
     .order('created_at', { ascending: false })
     .limit(10)
 
+  // Chart data: last 6 months
+  const sixMonthsAgo = new Date()
+  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
+  sixMonthsAgo.setDate(1)
+  const { data: chartQuotations } = await supabase
+    .from('quotations')
+    .select('created_at, total_amount_foreign, status')
+    .eq('user_id', user.id)
+    .gte('created_at', sixMonthsAgo.toISOString())
+    .order('created_at')
+
+  // Aggregate monthly totals (USD-equivalent)
+  const monthMap: Record<string, number> = {}
+  const statusCount: Record<string, number> = {}
+  for (const q of chartQuotations || []) {
+    const d = new Date(q.created_at)
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+    monthMap[key] = (monthMap[key] || 0) + (q.total_amount_foreign || 0)
+    const s = q.status || 'draft'
+    statusCount[s] = (statusCount[s] || 0) + 1
+  }
+
+  // Fill in all months even if no data
+  const monthlyData: { month: string; total: number }[] = []
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date()
+    d.setMonth(d.getMonth() - i)
+    d.setDate(1)
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+    const label = `${d.getMonth() + 1}月`
+    monthlyData.push({ month: label, total: Math.round((monthMap[key] || 0) * 100) / 100 })
+  }
+
+  const STATUS_LABELS: Record<string, string> = {
+    draft: '草稿', sent: '已发送', negotiating: '议价中', won: '已成交', lost: '已流失',
+  }
+  const quotesByStatus = Object.entries(statusCount).map(([s, count]) => ({
+    name: STATUS_LABELS[s] || s,
+    value: count,
+  }))
+
   // Calculate stats
   const totalProducts = products?.length || 0
   const totalCustomers = customers?.length || 0
@@ -67,6 +108,8 @@ export default async function DashboardPage() {
         customersByStatus,
       }}
       recentQuotations={recentQuotations || []}
+      monthlyData={monthlyData}
+      quotesByStatus={quotesByStatus}
     />
   )
 }

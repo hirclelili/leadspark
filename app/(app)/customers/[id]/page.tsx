@@ -4,11 +4,12 @@ import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import {
   ArrowLeft, Building, Mail, Phone, Globe, Calendar, FileText,
-  MessageSquare, Loader2, Plus, Edit, Trash2
+  MessageSquare, Loader2, Plus, Edit, Trash2, Sparkles, ClipboardCopy
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Select,
@@ -18,6 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { toast } from 'sonner'
+import { AiSidePanel } from '@/components/AiSidePanel'
 
 interface Customer {
   id: string
@@ -83,6 +85,15 @@ export default function CustomerDetailPage() {
   // Remark input
   const [remarkInput, setRemarkInput] = useState('')
   const [addingRemark, setAddingRemark] = useState(false)
+
+  // AI side panel
+  const [aiPanelOpen, setAiPanelOpen] = useState(false)
+  const [aiMode, setAiMode] = useState<'reply' | 'negotiate'>('reply')
+  const [aiGenerating, setAiGenerating] = useState(false)
+  const [aiReplyResult, setAiReplyResult] = useState<{ subject: string; body: string } | null>(null)
+  const [aiNegotiateResult, setAiNegotiateResult] = useState('')
+  const [negotiateMessage, setNegotiateMessage] = useState('')
+  const [negotiateMinPrice, setNegotiateMinPrice] = useState('')
 
   useEffect(() => {
     if (id) {
@@ -171,6 +182,94 @@ export default function CustomerDetailPage() {
     }
   }
 
+  const openAiPanel = async (mode: 'reply' | 'negotiate') => {
+    setAiMode(mode)
+    setAiReplyResult(null)
+    setAiNegotiateResult('')
+    setAiPanelOpen(true)
+    if (mode === 'reply') {
+      handleGenerateReply()
+    }
+  }
+
+  const handleGenerateReply = async () => {
+    setAiGenerating(true)
+    setAiReplyResult(null)
+    try {
+      let companyName = ''
+      try {
+        const pr = await fetch('/api/user-profile')
+        const p = await pr.json()
+        companyName = p?.company_name || ''
+      } catch { /* ignore */ }
+
+      const q = quotations[0]
+      if (!q) { toast.error('该客户暂无报价记录'); setAiGenerating(false); return }
+
+      const res = await fetch('/api/ai/generate-reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          quotation: {
+            quotation_number: q.quotation_number,
+            trade_term: q.trade_term,
+            currency: q.currency,
+            products: (q.products || []).map((p) => ({
+              name: p.name,
+              quantity: p.qty,
+              unit: p.unit,
+              unit_price: p.unit_price_foreign || 0,
+            })),
+            total_amount_foreign: q.total_amount_foreign,
+          },
+          customer: {
+            company_name: customer?.company_name || '',
+            contact_name: customer?.contact_name || undefined,
+          },
+          company_name: companyName,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || '生成失败')
+      setAiReplyResult({ subject: data.email_subject || '', body: data.email_body || '' })
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : '生成失败，请重试')
+    } finally {
+      setAiGenerating(false)
+    }
+  }
+
+  const handleNegotiate = async () => {
+    if (!negotiateMessage.trim()) { toast.error('请填写客户议价消息'); return }
+    setAiGenerating(true)
+    setAiNegotiateResult('')
+    try {
+      const q = quotations[0]
+      const productName = q?.products?.[0]?.name || customer?.company_name || '产品'
+      const quotedPrice = q?.products?.[0]?.unit_price_foreign || 0
+      const currency = q?.currency || 'USD'
+
+      const res = await fetch('/api/ai/negotiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customer_message: negotiateMessage,
+          product_name: productName,
+          quoted_price: quotedPrice,
+          currency,
+          min_price: negotiateMinPrice ? parseFloat(negotiateMinPrice) : undefined,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || '生成失败')
+      setAiNegotiateResult(data.reply || '')
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : '生成失败，请重试')
+    } finally {
+      setAiGenerating(false)
+    }
+  }
+
   const formatDate = (iso: string) => {
     return new Date(iso).toLocaleDateString('zh-CN')
   }
@@ -213,10 +312,20 @@ export default function CustomerDetailPage() {
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle>客户信息</CardTitle>
             {!editing ? (
-              <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
-                <Edit className="mr-2 h-4 w-4" />
-                编辑
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => openAiPanel('reply')}>
+                  <Sparkles className="mr-1.5 h-3.5 w-3.5 text-blue-500" />
+                  AI 报价邮件
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => openAiPanel('negotiate')}>
+                  <Sparkles className="mr-1.5 h-3.5 w-3.5 text-orange-500" />
+                  AI 议价回复
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+                  <Edit className="mr-2 h-4 w-4" />
+                  编辑
+                </Button>
+              </div>
             ) : (
               <div className="flex gap-2">
                 <Button
@@ -503,6 +612,113 @@ export default function CustomerDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* AI 侧边面板 */}
+      <AiSidePanel
+        open={aiPanelOpen}
+        onClose={() => setAiPanelOpen(false)}
+        title={aiMode === 'reply' ? 'AI 生成报价邮件' : 'AI 议价回复'}
+      >
+        {aiMode === 'reply' ? (
+          <div className="p-5 space-y-4">
+            <p className="text-sm text-gray-500">基于最近一条报价记录，自动生成专业英文报价回复邮件。</p>
+
+            {aiGenerating && (
+              <div className="flex items-center justify-center py-12 text-gray-400">
+                <Loader2 className="w-6 h-6 animate-spin mr-2" />
+                <span className="text-sm">AI 生成中...</span>
+              </div>
+            )}
+
+            {!aiGenerating && !aiReplyResult && (
+              <Button className="w-full" onClick={handleGenerateReply}>
+                <Sparkles className="mr-2 h-4 w-4" />
+                生成邮件
+              </Button>
+            )}
+
+            {aiReplyResult && (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium">邮件主题</label>
+                    <button className="text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
+                      onClick={() => { navigator.clipboard.writeText(aiReplyResult.subject); toast.success('已复制') }}>
+                      <ClipboardCopy className="w-3 h-3" />复制
+                    </button>
+                  </div>
+                  <div className="bg-gray-50 rounded-md p-3 text-sm font-medium border">{aiReplyResult.subject}</div>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium">邮件正文</label>
+                    <button className="text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
+                      onClick={() => { navigator.clipboard.writeText(aiReplyResult.body); toast.success('已复制') }}>
+                      <ClipboardCopy className="w-3 h-3" />复制
+                    </button>
+                  </div>
+                  <Textarea value={aiReplyResult.body}
+                    onChange={(e) => setAiReplyResult((prev) => prev ? { ...prev, body: e.target.value } : prev)}
+                    rows={16} className="text-sm font-mono resize-none" />
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="outline" className="flex-1"
+                    onClick={() => { navigator.clipboard.writeText(`Subject: ${aiReplyResult.subject}\n\n${aiReplyResult.body}`); toast.success('已复制全部') }}>
+                    <ClipboardCopy className="mr-2 h-4 w-4" />复制全部
+                  </Button>
+                  <Button variant="outline" className="flex-1" onClick={handleGenerateReply} disabled={aiGenerating}>
+                    重新生成
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="p-5 space-y-4">
+            <p className="text-sm text-gray-500">粘贴客户的还价消息，AI 自动生成专业的议价回复邮件。</p>
+
+            {quotations[0] && (
+              <div className="bg-blue-50 rounded-lg p-3 text-xs text-blue-700 space-y-1">
+                <div>参考报价：{quotations[0].quotation_number}</div>
+                <div>产品：{quotations[0].products?.[0]?.name || '—'}</div>
+                <div>报价单价：{quotations[0].currency} {quotations[0].products?.[0]?.unit_price_foreign?.toFixed(4) || '—'}/{quotations[0].products?.[0]?.unit || 'pc'}</div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">客户议价消息</label>
+              <Textarea placeholder="粘贴客户的还价邮件内容..." rows={6} value={negotiateMessage}
+                onChange={(e) => setNegotiateMessage(e.target.value)} className="resize-none text-sm" />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">最低可接受单价（可选）</label>
+              <Input type="number" placeholder={`如 ${quotations[0]?.currency || 'USD'} 10.00`}
+                value={negotiateMinPrice} onChange={(e) => setNegotiateMinPrice(e.target.value)} />
+            </div>
+
+            <Button className="w-full" onClick={handleNegotiate} disabled={aiGenerating}>
+              {aiGenerating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+              生成议价回复
+            </Button>
+
+            {aiNegotiateResult && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium">回复草稿</label>
+                  <button className="text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
+                    onClick={() => { navigator.clipboard.writeText(aiNegotiateResult); toast.success('已复制') }}>
+                    <ClipboardCopy className="w-3 h-3" />复制
+                  </button>
+                </div>
+                <Textarea value={aiNegotiateResult}
+                  onChange={(e) => setAiNegotiateResult(e.target.value)}
+                  rows={14} className="text-sm font-mono resize-none" />
+              </div>
+            )}
+          </div>
+        )}
+      </AiSidePanel>
     </div>
   )
 }

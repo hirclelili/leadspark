@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Settings, Building, Upload, Loader2, Check } from 'lucide-react'
+import { Settings, Building, Upload, Loader2, Check, CreditCard } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -27,12 +27,21 @@ interface UserProfile {
   default_currency?: string
   default_payment_terms?: string
   default_validity?: number
+  bank_name?: string
+  bank_account?: string
+  bank_swift?: string
+  bank_beneficiary?: string
 }
 
 const currencies = [
   { value: 'USD', label: 'USD - 美元' },
   { value: 'EUR', label: 'EUR - 欧元' },
   { value: 'GBP', label: 'GBP - 英镑' },
+  { value: 'JPY', label: 'JPY - 日元' },
+  { value: 'AUD', label: 'AUD - 澳元' },
+  { value: 'CAD', label: 'CAD - 加元' },
+  { value: 'AED', label: 'AED - 迪拉姆' },
+  { value: 'SGD', label: 'SGD - 新加坡元' },
   { value: 'CNY', label: 'CNY - 人民币' },
 ]
 
@@ -63,6 +72,10 @@ export function SettingsClient() {
     default_currency: 'USD',
     default_payment_terms: 'T/T 30% deposit, 70% before shipment',
     default_validity: 30,
+    bank_name: '',
+    bank_account: '',
+    bank_swift: '',
+    bank_beneficiary: '',
   })
 
   const supabase = createClient()
@@ -90,6 +103,10 @@ export function SettingsClient() {
           default_currency: data.default_currency || 'USD',
           default_payment_terms: data.default_payment_terms || 'T/T 30% deposit, 70% before shipment',
           default_validity: data.default_validity || 30,
+          bank_name: data.bank_name || '',
+          bank_account: data.bank_account || '',
+          bank_swift: data.bank_swift || '',
+          bank_beneficiary: data.bank_beneficiary || '',
         })
       }
     } catch (error) {
@@ -349,6 +366,70 @@ export function SettingsClient() {
               </div>
             </div>
 
+            <Button onClick={handleSave} disabled={saving} className="w-full">
+              {saving ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  保存中...
+                </>
+              ) : (
+                <>
+                  <Check className="mr-2 h-4 w-4" />
+                  保存设置
+                </>
+              )}
+            </Button>
+          </CardContent>
+        </Card>
+
+        {/* Bank Account Info */}
+        <Card className="md:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CreditCard className="w-5 h-5" />
+              银行收款信息
+            </CardTitle>
+            <CardDescription>
+              将显示在报价单 PDF 底部，方便客户付款
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">收款行名称</label>
+                <Input
+                  value={formData.bank_name}
+                  onChange={(e) => setFormData({ ...formData, bank_name: e.target.value })}
+                  placeholder="Bank of China, ICBC..."
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">收款人名称</label>
+                <Input
+                  value={formData.bank_beneficiary}
+                  onChange={(e) => setFormData({ ...formData, bank_beneficiary: e.target.value })}
+                  placeholder="ABC Trading Co., Ltd."
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">银行账号</label>
+                <Input
+                  value={formData.bank_account}
+                  onChange={(e) => setFormData({ ...formData, bank_account: e.target.value })}
+                  placeholder="1234 5678 9012 3456"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">SWIFT/BIC Code</label>
+                <Input
+                  value={formData.bank_swift}
+                  onChange={(e) => setFormData({ ...formData, bank_swift: e.target.value })}
+                  placeholder="BKCHCNBJ"
+                />
+              </div>
+            </div>
             <Button onClick={handleSave} disabled={saving} className="w-full">
               {saving ? (
                 <>

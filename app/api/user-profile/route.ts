@@ -42,6 +42,10 @@ export async function POST(request: Request) {
       default_currency,
       default_payment_terms,
       default_validity,
+      bank_name,
+      bank_account,
+      bank_swift,
+      bank_beneficiary,
     } = body
 
     // Upsert – insert or update based on user_id
@@ -60,6 +64,10 @@ export async function POST(request: Request) {
           default_currency: default_currency || 'USD',
           default_payment_terms: default_payment_terms || 'T/T 30% deposit, 70% before shipment',
           default_validity: default_validity || 30,
+          bank_name,
+          bank_account,
+          bank_swift,
+          bank_beneficiary,
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'user_id' }

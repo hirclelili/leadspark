@@ -1,9 +1,21 @@
 'use client'
 
 import Link from 'next/link'
-import { Calculator, Package, Users, Settings, TrendingUp, FileText, Clock, ArrowRight } from 'lucide-react'
+import { Calculator, Package, Users, Settings, TrendingUp, FileText, ArrowRight } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  BarChart,
+  Bar,
+  Cell,
+} from 'recharts'
 
 interface Stats {
   totalProducts: number
@@ -22,9 +34,25 @@ interface DashboardClientProps {
   companyName: string
   stats: Stats
   recentQuotations: any[]
+  monthlyData: { month: string; total: number }[]
+  quotesByStatus: { name: string; value: number }[]
 }
 
-export function DashboardClient({ companyName, stats, recentQuotations }: DashboardClientProps) {
+const STATUS_COLORS: Record<string, string> = {
+  '草稿': '#9ca3af',
+  '已发送': '#3b82f6',
+  '议价中': '#f59e0b',
+  '已成交': '#22c55e',
+  '已流失': '#ef4444',
+}
+
+export function DashboardClient({
+  companyName,
+  stats,
+  recentQuotations,
+  monthlyData,
+  quotesByStatus,
+}: DashboardClientProps) {
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr)
     return date.toLocaleString('zh-CN', {
@@ -32,6 +60,8 @@ export function DashboardClient({ companyName, stats, recentQuotations }: Dashbo
       day: 'numeric',
     })
   }
+
+  const hasChartData = monthlyData.some((d) => d.total > 0)
 
   return (
     <div className="p-8 pt-16 md:pt-8 space-y-6">
@@ -144,6 +174,82 @@ export function DashboardClient({ companyName, stats, recentQuotations }: Dashbo
                 <div className="text-xs text-gray-600">已流失</div>
               </div>
             </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Charts row */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Monthly trend */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <TrendingUp className="w-4 h-4 text-blue-500" />
+              报价趋势（近6个月）
+            </CardTitle>
+            <CardDescription>各月外币报价金额合计</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {hasChartData ? (
+              <ResponsiveContainer width="100%" height={180}>
+                <LineChart data={monthlyData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}k` : v} />
+                  <Tooltip
+                    formatter={(value) => [`$${Number(value).toFixed(2)}`, '金额']}
+                    labelStyle={{ color: '#374151' }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="total"
+                    stroke="#3b82f6"
+                    strokeWidth={2}
+                    dot={{ r: 4, fill: '#3b82f6' }}
+                    activeDot={{ r: 6 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-[180px] flex items-center justify-center text-gray-400 text-sm">
+                近6个月暂无报价数据
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Quote status distribution */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <FileText className="w-4 h-4 text-purple-500" />
+              报价状态分布
+            </CardTitle>
+            <CardDescription>近6个月各状态报价数量</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {quotesByStatus.length > 0 ? (
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart
+                  data={quotesByStatus}
+                  layout="vertical"
+                  margin={{ top: 0, right: 20, left: 0, bottom: 0 }}
+                >
+                  <XAxis type="number" tick={{ fontSize: 11 }} allowDecimals={false} />
+                  <YAxis type="category" dataKey="name" width={55} tick={{ fontSize: 12 }} />
+                  <Tooltip formatter={(v) => [Number(v), '报价数']} />
+                  <Bar dataKey="value" radius={[0, 4, 4, 0]}>
+                    {quotesByStatus.map((entry, index) => (
+                      <Cell key={index} fill={STATUS_COLORS[entry.name] || '#6b7280'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-[180px] flex items-center justify-center text-gray-400 text-sm">
+                近6个月暂无报价数据
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

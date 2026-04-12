@@ -19,11 +19,41 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
     const page = parseInt(searchParams.get('page') || '1')
     const limit = parseInt(searchParams.get('limit') || '10')
+    const search = searchParams.get('search') || ''
+    const status = searchParams.get('status') || ''
+    const date_from = searchParams.get('date_from') || ''
+    const date_to = searchParams.get('date_to') || ''
 
-    const { data, error, count } = await supabase
+    let query = supabase
       .from('quotations')
       .select('*, customers(company_name)', { count: 'exact' })
       .eq('user_id', user.id)
+
+    // Search by quotation number
+    if (search) {
+      // First find customers matching the search term
+      const { data: matchingCustomers } = await supabase
+        .from('customers')
+        .select('id')
+        .eq('user_id', user.id)
+        .ilike('company_name', `%${search}%`)
+
+      const customerIds = (matchingCustomers || []).map((c: { id: string }) => c.id)
+
+      if (customerIds.length > 0) {
+        query = query.or(
+          `quotation_number.ilike.%${search}%,customer_id.in.(${customerIds.join(',')})`
+        )
+      } else {
+        query = query.ilike('quotation_number', `%${search}%`)
+      }
+    }
+
+    if (status) query = query.eq('status', status)
+    if (date_from) query = query.gte('created_at', date_from)
+    if (date_to) query = query.lte('created_at', date_to + 'T23:59:59Z')
+
+    const { data, error, count } = await query
       .order('created_at', { ascending: false })
       .range((page - 1) * limit, page * limit - 1)
 
