@@ -1,0 +1,2 @@
+ALTER TABLE quotations ADD COLUMN IF NOT EXISTS po_number TEXT;
+ALTER TABLE quotations ADD COLUMN IF NOT EXISTS deposit_percent NUMERIC;

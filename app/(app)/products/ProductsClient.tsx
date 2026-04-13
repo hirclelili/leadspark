@@ -22,7 +22,6 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
@@ -47,7 +46,7 @@ export function ProductsClient() {
   const [page, setPage] = useState(1)
   const [limit] = useState(10)
   const [search, setSearch] = useState('')
-  const [category, setCategory] = useState('')
+  const [category, setCategory] = useState('all')
   const [categories, setCategories] = useState<string[]>([])
 
   // Dialog states
@@ -77,7 +76,7 @@ export function ProductsClient() {
         limit: String(limit),
       })
       if (search) params.set('search', search)
-      if (category) params.set('category', category)
+      if (category && category !== 'all') params.set('category', category)
 
       const res = await fetch(`/api/products?${params}`)
       const data = await res.json()
@@ -190,12 +189,10 @@ export function ProductsClient() {
             批量导入
           </Button>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button onClick={() => handleOpenDialog()}>
-                <Plus className="mr-2 h-4 w-4" />
-                添加产品
-              </Button>
-            </DialogTrigger>
+            <Button onClick={() => handleOpenDialog()}>
+              <Plus className="mr-2 h-4 w-4" />
+              添加产品
+            </Button>
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>
@@ -303,12 +300,12 @@ export function ProductsClient() {
             }}
           />
         </div>
-        <Select value={category} onValueChange={(v) => { setCategory(v); setPage(1) }}>
+        <Select value={category} onValueChange={(v) => { setCategory(v ?? 'all'); setPage(1) }}>
           <SelectTrigger className="w-[180px]">
             <SelectValue placeholder="全部分类" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">全部分类</SelectItem>
+            <SelectItem value="all">全部分类</SelectItem>
             {categories.map((c) => (
               <SelectItem key={c} value={c}>{c}</SelectItem>
             ))}

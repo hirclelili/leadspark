@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Settings, Building, Upload, Loader2, Check, CreditCard } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
@@ -43,6 +43,7 @@ const currencies = [
   { value: 'AED', label: 'AED - 迪拉姆' },
   { value: 'SGD', label: 'SGD - 新加坡元' },
   { value: 'CNY', label: 'CNY - 人民币' },
+  { value: 'HKD', label: 'HKD - 港币' },
 ]
 
 const paymentTermsOptions = [
@@ -79,6 +80,7 @@ export function SettingsClient() {
   })
 
   const supabase = createClient()
+  const logoInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     fetchProfile()
@@ -217,27 +219,32 @@ export function SettingsClient() {
                   )}
                 </div>
                 <div>
-                  <label>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleLogoUpload}
-                      disabled={uploading}
-                      className="hidden"
-                    />
-                    <Button variant="outline" size="sm" asChild>
-                      <span className="cursor-pointer">
-                        {uploading ? (
-                          <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            上传中...
-                          </>
-                        ) : (
-                          '上传 Logo'
-                        )}
-                      </span>
-                    </Button>
-                  </label>
+                  <input
+                    ref={logoInputRef}
+                    id="company-logo-upload"
+                    type="file"
+                    accept="image/*"
+                    onChange={handleLogoUpload}
+                    disabled={uploading}
+                    className="sr-only"
+                    aria-label="上传公司 Logo"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={uploading}
+                    onClick={() => logoInputRef.current?.click()}
+                  >
+                    {uploading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        上传中...
+                      </>
+                    ) : (
+                      '上传 Logo'
+                    )}
+                  </Button>
                   <p className="text-xs text-gray-500 mt-1">支持 PNG、JPG，建议 200x200</p>
                 </div>
               </div>
@@ -303,19 +310,19 @@ export function SettingsClient() {
             </div>
 
             {/* Default Settings */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="space-y-2">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3 min-w-0">
+              <div className="min-w-0 space-y-2">
                 <label className="text-sm font-medium">默认报价货币</label>
                 <Select
                   value={formData.default_currency}
-                  onValueChange={(value) =>
-                    setFormData({ ...formData, default_currency: value })
-                  }
+                  onValueChange={(value) => {
+                    if (value != null) setFormData({ ...formData, default_currency: value })
+                  }}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full min-w-0">
                     <SelectValue placeholder="选择货币" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="max-w-[min(100vw-2rem,28rem)]">
                     {currencies.map((c) => (
                       <SelectItem key={c.value} value={c.value}>
                         {c.label}
@@ -324,18 +331,18 @@ export function SettingsClient() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
+              <div className="min-w-0 space-y-2">
                 <label className="text-sm font-medium">默认付款条件</label>
                 <Select
                   value={formData.default_payment_terms}
-                  onValueChange={(value) =>
-                    setFormData({ ...formData, default_payment_terms: value })
-                  }
+                  onValueChange={(value) => {
+                    if (value != null) setFormData({ ...formData, default_payment_terms: value })
+                  }}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full min-w-0">
                     <SelectValue placeholder="选择付款条件" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="max-w-[min(100vw-2rem,28rem)]">
                     {paymentTermsOptions.map((p) => (
                       <SelectItem key={p.value} value={p.value}>
                         {p.label}
@@ -344,7 +351,7 @@ export function SettingsClient() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
+              <div className="min-w-0 space-y-2 lg:col-span-2 xl:col-span-1">
                 <label className="text-sm font-medium">报价有效天数</label>
                 <Select
                   value={String(formData.default_validity)}
@@ -352,10 +359,10 @@ export function SettingsClient() {
                     setFormData({ ...formData, default_validity: Number(value) })
                   }
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full min-w-0">
                     <SelectValue placeholder="选择天数" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="max-w-[min(100vw-2rem,28rem)]">
                     <SelectItem value="7">7 天</SelectItem>
                     <SelectItem value="14">14 天</SelectItem>
                     <SelectItem value="30">30 天</SelectItem>

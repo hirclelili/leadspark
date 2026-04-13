@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { Calculator, ChevronDown, ChevronUp, Loader2, RefreshCw, FileText, Search, ArrowLeft, Plus, X, Package, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { AiSidePanel } from '@/components/AiSidePanel'
@@ -46,7 +46,11 @@ const currencies = [
   { value: 'CAD', label: 'CAD - 加元' },
   { value: 'AED', label: 'AED - 迪拉姆' },
   { value: 'SGD', label: 'SGD - 新加坡元' },
+  { value: 'CNY', label: 'CNY - 人民币' },
+  { value: 'HKD', label: 'HKD - 港币' },
 ]
+
+const OUTPUT_TRADE_TERM = 'EXW' as const
 
 const PAYMENT_TERMS_OPTIONS = [
   'T/T 30% deposit, 70% before shipment',
@@ -90,7 +94,11 @@ interface MultiProductQuoteResult {
   orderTotals: QuoteResult[]  // sum across all products per Incoterm
 }
 
+type QuoteLayoutMode = 'product_list' | 'container_group'
+
 interface PDFProductRow {
+  /** Section title row (e.g. container); excluded from totals and cost alignment by index. */
+  isContainerHeader?: boolean
   name: string
   model: string
   specs: string
@@ -98,6 +106,31 @@ interface PDFProductRow {
   unit: string
   unit_price_foreign: number
   amount_foreign: number
+}
+
+function emptyProductPdfRow(price = 0): PDFProductRow {
+  return {
+    name: '',
+    model: '',
+    specs: '',
+    qty: 1,
+    unit: 'pc',
+    unit_price_foreign: price,
+    amount_foreign: price,
+  }
+}
+
+function emptyContainerHeaderRow(): PDFProductRow {
+  return {
+    isContainerHeader: true,
+    name: '',
+    model: '',
+    specs: '',
+    qty: 0,
+    unit: '',
+    unit_price_foreign: 0,
+    amount_foreign: 0,
+  }
 }
 
 interface Customer {
@@ -118,6 +151,7 @@ interface UserProfile {
   phone?: string
   email?: string
   website?: string
+  default_currency?: string
   default_payment_terms?: string
   default_validity?: number
   bank_name?: string
@@ -279,8 +313,14 @@ export default function QuotePage() {
     date: string; trade_term: string; currency: string; total_amount_foreign: number
   } | null>(null)
   const [quoteDetails, setQuoteDetails] = useState({
-    tradeTerm: 'FOB',
-    type: 'QUOTATION' as 'QUOTATION' | 'PI',
+    tradeTerm: OUTPUT_TRADE_TERM,
+    documentKind: 'QUOTATION' as 'QUOTATION' | 'PL' | 'PI' | 'CI',
+    referenceNumber: '',
+    poNumber: '',
+    depositPercent: '30',
+    sellerVisiblePl: true,
+    sellerVisiblePi: true,
+    sellerVisibleCi: true,
     paymentTerms: 'T/T 30% deposit, 70% before shipment',
     deliveryTime: '30 days after deposit',
     packing: '',
@@ -291,6 +331,9 @@ export default function QuotePage() {
   const [previewing, setPreviewing] = useState(false)
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   const [pdfProducts, setPdfProducts] = useState<PDFProductRow[]>([])
+  const [quoteLayoutMode, setQuoteLayoutMode] = useState<QuoteLayoutMode>('product_list')
+  /** 上一档「计算器有效行数」，用于 product_list 下正确切分「对齐行 / 手动追加行」，避免减少计算器行数时旧行被误并入 tail。 */
+  const pdfProductListCalcLenRef = useRef<number | null>(null)
 
   // ── AI Side Panel state
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
@@ -331,8 +374,8 @@ export default function QuotePage() {
   }, [showLCLFCL, lclData, fclData])
 
   const selectedTradeResult = useMemo(
-    () => multiResults?.orderTotals.find((r) => r.term === quoteDetails.tradeTerm) || null,
-    [multiResults, quoteDetails.tradeTerm]
+    () => multiResults?.orderTotals.find((r) => r.term === OUTPUT_TRADE_TERM) || null,
+    [multiResults]
   )
 
   // ── Effects
@@ -348,6 +391,17 @@ export default function QuotePage() {
         if (draft.calcProducts) setCalcProducts(draft.calcProducts)
         if (draft.formData) setFormData((prev) => ({ ...prev, ...draft.formData }))
         if (draft.quoteDetails) setQuoteDetails((prev) => ({ ...prev, ...draft.quoteDetails }))
+        if (draft.quoteLayoutMode === 'container_group' || draft.quoteLayoutMode === 'product_list') {
+          setQuoteLayoutMode(draft.quoteLayoutMode)
+        }
+        if (Array.isArray(draft.pdfProducts) && draft.pdfProducts.length > 0) {
+          setPdfProducts(
+            draft.pdfProducts.map((row: PDFProductRow) => ({
+              ...row,
+              isContainerHeader: Boolean(row.isContainerHeader),
+            }))
+          )
+        }
         localStorage.removeItem('leadspark_quote_draft')
       } catch { /* ignore */ }
     } else {
@@ -391,34 +445,88 @@ export default function QuotePage() {
     return () => clearTimeout(timer)
   }, [customerQuery])
 
-  // Auto-add ocean freight remark for CIF/CFR terms
   useEffect(() => {
-    const oceanNote = 'Ocean freight is subject to actual rate at time of shipment.'
-    const isCIF = ['CIF', 'CIP', 'CFR', 'CPT'].includes(quoteDetails.tradeTerm)
-    setQuoteDetails((prev) => {
-      const hasNote = prev.remarks.includes(oceanNote)
-      if (isCIF && !hasNote) return { ...prev, remarks: prev.remarks ? `${prev.remarks}\n${oceanNote}` : oceanNote }
-      if (!isCIF && hasNote) return { ...prev, remarks: prev.remarks.replace(`\n${oceanNote}`, '').replace(oceanNote, '').trim() }
-      return prev
-    })
-  }, [quoteDetails.tradeTerm])
+    pdfProductListCalcLenRef.current = null
+  }, [quoteLayoutMode])
 
-  // Sync pdfProducts prices when trade term or multiResults changes
+  // PDF 产品行：与计算器 EXW 对齐；产品列表模式为「前 N 行 + 手动行」；货柜模式保留标题行顺序并仅同步产品行价格
   useEffect(() => {
-    if (!multiResults || !quoteDialogOpen) return
+    if (!multiResults) return
     const validCalc = calcProducts.filter((p) => parseFloat(p.costPrice) > 0 && parseFloat(p.quantity) > 0)
-    setPdfProducts((prev) =>
-      prev.map((row, idx) => {
-        const calc = validCalc[idx]
-        if (!calc) return row
-        const bp = multiResults.byProduct.find((b) => b.productId === calc.id)
-        const tr = bp?.results.find((r) => r.term === quoteDetails.tradeTerm)
-        if (!tr) return row
-        const qty = parseFloat(calc.quantity) || 1
-        return { ...row, unit_price_foreign: tr.priceForeign, amount_foreign: tr.priceForeign * qty }
+    const newCalcLen = validCalc.length
+    const prevCalcLen = pdfProductListCalcLenRef.current
+
+    if (quoteLayoutMode === 'product_list') {
+      setPdfProducts((prev) => {
+        const head = validCalc.map((p, idx) => {
+          const bp = multiResults!.byProduct.find((b) => b.productId === p.id)
+          const tr = bp?.results.find((r) => r.term === OUTPUT_TRADE_TERM)
+          const unitPrice = tr?.priceForeign ?? 0
+          const qty = parseFloat(p.quantity) || 1
+          const reusePrevRow =
+            prevCalcLen == null ? idx < newCalcLen : idx < prevCalcLen
+          const prevRow = reusePrevRow ? prev[idx] : undefined
+          return {
+            name: prevRow?.name?.trim() ? prevRow.name : (p.name || '产品'),
+            model: prevRow?.model ?? p.model,
+            specs: prevRow?.specs ?? '',
+            qty,
+            unit: p.unit || 'pc',
+            unit_price_foreign: unitPrice,
+            amount_foreign: unitPrice * qty,
+          }
+        })
+        const tailStart = prevCalcLen == null ? newCalcLen : prevCalcLen
+        const tail = prev.slice(tailStart).map((row) => ({
+          ...row,
+          isContainerHeader: false,
+          amount_foreign: row.unit_price_foreign * (row.qty || 1),
+        }))
+        const out = [...head, ...tail]
+        return out.length > 0 ? out : [emptyProductPdfRow(0)]
       })
-    )
-  }, [multiResults, quoteDetails.tradeTerm, quoteDialogOpen])
+      pdfProductListCalcLenRef.current = newCalcLen
+      return
+    }
+
+    // container_group
+    setPdfProducts((prev) => {
+      const oldProducts = prev.filter((r) => !r.isContainerHeader)
+      const newProductRows = validCalc.map((p, idx) => {
+        const bp = multiResults!.byProduct.find((b) => b.productId === p.id)
+        const tr = bp?.results.find((r) => r.term === OUTPUT_TRADE_TERM)
+        const unitPrice = tr?.priceForeign ?? 0
+        const qty = parseFloat(p.quantity) || 1
+        const prevRow = oldProducts[idx]
+        return {
+          isContainerHeader: false as const,
+          name: prevRow?.name?.trim() ? prevRow.name : (p.name || '产品'),
+          model: prevRow?.model ?? p.model,
+          specs: prevRow?.specs ?? '',
+          qty,
+          unit: p.unit || 'pc',
+          unit_price_foreign: unitPrice,
+          amount_foreign: unitPrice * qty,
+        }
+      })
+
+      let pi = 0
+      const merged: PDFProductRow[] = []
+      for (const row of prev) {
+        if (row.isContainerHeader) {
+          merged.push({ ...row })
+          continue
+        }
+        const np = newProductRows[pi++]
+        if (np) merged.push(np)
+      }
+      while (pi < newProductRows.length) {
+        merged.push(newProductRows[pi++])
+      }
+      return merged.length > 0 ? merged : [emptyContainerHeaderRow(), emptyProductPdfRow(0)]
+    })
+    pdfProductListCalcLenRef.current = newCalcLen
+  }, [multiResults, calcProducts, quoteLayoutMode])
 
   // ── Functions
   const fetchLibraryProducts = async () => {
@@ -444,7 +552,7 @@ export default function QuotePage() {
   }
 
   const handleCurrencyChange = async (currency: string) => {
-    setFormData({ ...formData, currency })
+    setFormData((prev) => ({ ...prev, currency }))
     setRateLoading(true)
     try {
       const res = await fetch('/api/exchange-rate', {
@@ -497,7 +605,18 @@ export default function QuotePage() {
   }
 
   const getCurrencySymbol = (currency: string) => {
-    const symbols: Record<string, string> = { USD: '$', EUR: '€', GBP: '£' }
+    const symbols: Record<string, string> = {
+      USD: '$',
+      EUR: '€',
+      GBP: '£',
+      JPY: '¥',
+      AUD: 'A$',
+      CAD: 'C$',
+      AED: 'AED ',
+      SGD: 'S$',
+      CNY: '¥',
+      HKD: 'HK$',
+    }
     return symbols[currency] || '$'
   }
 
@@ -513,28 +632,19 @@ export default function QuotePage() {
     try {
       const res = await fetch('/api/user-profile')
       const profile = await res.json()
-      if (profile) {
+      if (profile && !profile.error) {
         setUserProfile(profile)
         setQuoteDetails((prev) => ({
           ...prev,
+          tradeTerm: OUTPUT_TRADE_TERM,
           paymentTerms: profile.default_payment_terms || prev.paymentTerms,
           validityDays: profile.default_validity || prev.validityDays,
         }))
+        if (profile.default_currency) {
+          await handleCurrencyChange(profile.default_currency)
+        }
       }
     } catch { /* use defaults */ }
-
-    // Initialize pdfProducts from calcProducts
-    const validCalc = calcProducts.filter((p) => parseFloat(p.costPrice) > 0 && parseFloat(p.quantity) > 0)
-    const rows: PDFProductRow[] = validCalc.map((p) => ({
-      name: p.name || '产品',
-      model: p.model,
-      specs: '',
-      qty: parseFloat(p.quantity) || 1,
-      unit: p.unit || 'pc',
-      unit_price_foreign: 0, // filled by trade-term sync effect
-      amount_foreign: 0,
-    }))
-    setPdfProducts(rows.length > 0 ? rows : [{ name: '', model: '', specs: '', qty: 1, unit: 'pc', unit_price_foreign: 0, amount_foreign: 0 }])
 
     setQuoteDialogOpen(true)
   }
@@ -560,7 +670,15 @@ export default function QuotePage() {
     if (!selectedCustomer && !isNewCustomer) { toast.error('请选择或新建客户'); return }
     if (isNewCustomer && !newCustomerData.company_name.trim()) { toast.error('请填写客户公司名称'); return }
     if (!selectedTradeResult) { toast.error('请先填写成本信息并计算报价'); return }
-    if (pdfProducts.length === 0 || pdfProducts.some((p) => !p.name.trim())) { toast.error('请填写所有产品名称'); return }
+    const pdfDataRows = pdfProducts.filter((p) => !p.isContainerHeader)
+    if (pdfDataRows.length === 0 || pdfDataRows.some((p) => !p.name.trim())) {
+      toast.error('请填写所有产品名称')
+      return
+    }
+    if (quoteLayoutMode === 'container_group' && pdfProducts.some((p) => p.isContainerHeader && !p.name.trim())) {
+      toast.error('请填写所有货柜/分组标题')
+      return
+    }
 
     setGenerating(true)
     try {
@@ -579,26 +697,45 @@ export default function QuotePage() {
         customerAddress = data.address || ''
       }
 
-      const totalForeign = pdfProducts.reduce((s, p) => s + p.amount_foreign, 0)
+      const totalForeign = pdfDataRows.reduce((s, p) => s + p.amount_foreign, 0)
       const totalCNY = totalForeign / exchangeRate
 
       const validCalc = calcProducts.filter((p) => parseFloat(p.costPrice) > 0)
-      const productsForDB = pdfProducts.map((p, idx) => ({
-        name: p.name,
-        model: p.model || undefined,
-        qty: p.qty,
-        unit: p.unit,
-        cost_price: parseFloat(validCalc[idx]?.costPrice || '0'),
-        unit_price_foreign: p.unit_price_foreign,
-        amount_foreign: p.amount_foreign,
-      }))
+      let calcSlot = 0
+      const productsForDB = pdfProducts.map((p) => {
+        if (p.isContainerHeader) {
+          return {
+            is_container_header: true,
+            name: p.name,
+            model: p.model || undefined,
+            specs: p.specs || undefined,
+            qty: 0,
+            unit: p.unit || 'pc',
+            cost_price: 0,
+            unit_price_foreign: 0,
+            amount_foreign: 0,
+          }
+        }
+        const c = validCalc[calcSlot++]
+        return {
+          is_container_header: false,
+          name: p.name,
+          model: p.model || undefined,
+          specs: p.specs || undefined,
+          qty: p.qty,
+          unit: p.unit,
+          cost_price: parseFloat(c?.costPrice || '0'),
+          unit_price_foreign: p.unit_price_foreign,
+          amount_foreign: p.amount_foreign,
+        }
+      })
 
       const saveRes = await fetch('/api/quotations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer_id: customerId,
-          trade_term: quoteDetails.tradeTerm,
+          trade_term: OUTPUT_TRADE_TERM,
           currency: formData.currency,
           exchange_rate: exchangeRate,
           products: productsForDB,
@@ -616,6 +753,17 @@ export default function QuotePage() {
           validity_days: quoteDetails.validityDays,
           packing: quoteDetails.packing,
           remarks: quoteDetails.remarks,
+          document_kind: quoteDetails.documentKind,
+          reference_number: quoteDetails.referenceNumber.trim() || null,
+          seller_visible_pl: quoteDetails.sellerVisiblePl,
+          seller_visible_pi: quoteDetails.sellerVisiblePi,
+          seller_visible_ci: quoteDetails.sellerVisibleCi,
+          po_number: quoteDetails.poNumber.trim() || null,
+          deposit_percent:
+            quoteDetails.documentKind === 'PI'
+              ? parseFloat(quoteDetails.depositPercent) || 0
+              : null,
+          quote_mode: quoteLayoutMode,
         }),
       })
 
@@ -633,6 +781,17 @@ export default function QuotePage() {
       const { QuotationPDF } = await import('@/components/pdf/QuotationPDF')
 
       const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+      const docKind = quoteDetails.documentKind
+      const showSellerHeader =
+        docKind === 'PL'
+          ? quoteDetails.sellerVisiblePl
+          : docKind === 'PI' || docKind === 'QUOTATION'
+            ? quoteDetails.sellerVisiblePi
+            : quoteDetails.sellerVisibleCi
+      const displayNo = quoteDetails.referenceNumber.trim() || savedQuote.quotation_number
+      const depPct =
+        docKind === 'PI' ? parseFloat(quoteDetails.depositPercent) || 0 : 0
+
       const element = React.createElement(QuotationPDF, {
         companyName: userProfile?.company_name || 'Your Company',
         companyNameCn: userProfile?.company_name_cn,
@@ -649,20 +808,34 @@ export default function QuotePage() {
         clientContact: customerContact || undefined,
         clientAddress: customerAddress || undefined,
         quotationNumber: savedQuote.quotation_number,
+        documentNumberDisplay: displayNo,
         date: today,
         validityDays: quoteDetails.validityDays,
-        tradeTerm: quoteDetails.tradeTerm,
+        tradeTerm: OUTPUT_TRADE_TERM,
         currency: formData.currency,
-        products: pdfProducts.map((p) => ({ name: p.name, model: p.model || undefined, specs: p.specs || undefined, qty: p.qty, unit: p.unit, unit_price_foreign: p.unit_price_foreign, amount_foreign: p.amount_foreign })),
+        products: pdfProducts.map((p) => ({
+          name: p.name,
+          model: p.model || undefined,
+          specs: p.specs || undefined,
+          qty: p.qty,
+          unit: p.unit,
+          unit_price_foreign: p.unit_price_foreign,
+          amount_foreign: p.amount_foreign,
+          is_container_header: p.isContainerHeader === true,
+        })),
+        quoteMode: quoteLayoutMode,
         totalAmount: totalForeign,
         paymentTerms: quoteDetails.paymentTerms,
         deliveryTime: quoteDetails.deliveryTime,
         packing: quoteDetails.packing || undefined,
         remarks: quoteDetails.remarks || undefined,
-        type: quoteDetails.type,
+        documentKind: docKind,
+        showSellerHeader,
+        poNumber: quoteDetails.poNumber.trim() || undefined,
+        depositPercent: depPct,
       })
 
-      const blob = await pdf(element).toBlob()
+      const blob = await pdf(element as Parameters<typeof pdf>[0]).toBlob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -684,7 +857,15 @@ export default function QuotePage() {
   const handlePreviewPDF = async () => {
     if (!selectedCustomer && !isNewCustomer) { toast.error('请先选择客户'); return }
     if (!selectedTradeResult) { toast.error('请先填写成本信息并计算报价'); return }
-    if (pdfProducts.length === 0 || pdfProducts.some((p) => !p.name.trim())) { toast.error('请填写所有产品名称'); return }
+    const pdfDataRowsPv = pdfProducts.filter((p) => !p.isContainerHeader)
+    if (pdfDataRowsPv.length === 0 || pdfDataRowsPv.some((p) => !p.name.trim())) {
+      toast.error('请填写所有产品名称')
+      return
+    }
+    if (quoteLayoutMode === 'container_group' && pdfProducts.some((p) => p.isContainerHeader && !p.name.trim())) {
+      toast.error('请填写所有货柜/分组标题')
+      return
+    }
 
     setPreviewing(true)
     try {
@@ -694,7 +875,9 @@ export default function QuotePage() {
       const customerName = selectedCustomer?.company_name || newCustomerData.company_name
       const customerContact = selectedCustomer?.contact_name || newCustomerData.contact_name || ''
       const customerAddress = selectedCustomer?.address || newCustomerData.address || ''
-      const totalForeign = pdfProducts.reduce((s, p) => s + p.amount_foreign, 0)
+      const totalForeign = pdfProducts
+        .filter((p) => !p.isContainerHeader)
+        .reduce((s, p) => s + p.amount_foreign, 0)
       const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
 
       const element = React.createElement(QuotationPDF, {
@@ -713,20 +896,43 @@ export default function QuotePage() {
         clientContact: customerContact || undefined,
         clientAddress: customerAddress || undefined,
         quotationNumber: 'PREVIEW',
+        documentNumberDisplay: quoteDetails.referenceNumber.trim() || 'PREVIEW',
         date: today,
         validityDays: quoteDetails.validityDays,
-        tradeTerm: quoteDetails.tradeTerm,
+        tradeTerm: OUTPUT_TRADE_TERM,
         currency: formData.currency,
-        products: pdfProducts.map((p) => ({ name: p.name, model: p.model || undefined, specs: p.specs || undefined, qty: p.qty, unit: p.unit, unit_price_foreign: p.unit_price_foreign, amount_foreign: p.amount_foreign })),
+        products: pdfProducts.map((p) => ({
+          name: p.name,
+          model: p.model || undefined,
+          specs: p.specs || undefined,
+          qty: p.qty,
+          unit: p.unit,
+          unit_price_foreign: p.unit_price_foreign,
+          amount_foreign: p.amount_foreign,
+          is_container_header: p.isContainerHeader === true,
+        })),
+        quoteMode: quoteLayoutMode,
         totalAmount: totalForeign,
         paymentTerms: quoteDetails.paymentTerms,
         deliveryTime: quoteDetails.deliveryTime,
         packing: quoteDetails.packing || undefined,
         remarks: quoteDetails.remarks || undefined,
-        type: quoteDetails.type,
+        documentKind: quoteDetails.documentKind,
+        showSellerHeader:
+          quoteDetails.documentKind === 'PL'
+            ? quoteDetails.sellerVisiblePl
+            : quoteDetails.documentKind === 'PI' ||
+                quoteDetails.documentKind === 'QUOTATION'
+              ? quoteDetails.sellerVisiblePi
+              : quoteDetails.sellerVisibleCi,
+        poNumber: quoteDetails.poNumber.trim() || undefined,
+        depositPercent:
+          quoteDetails.documentKind === 'PI'
+            ? parseFloat(quoteDetails.depositPercent) || 0
+            : 0,
       })
 
-      const blob = await pdf(element).toBlob()
+      const blob = await pdf(element as Parameters<typeof pdf>[0]).toBlob()
       const url = URL.createObjectURL(blob)
       window.open(url, '_blank')
       setTimeout(() => URL.revokeObjectURL(url), 5000)
@@ -772,13 +978,6 @@ export default function QuotePage() {
       }
       return updated
     })
-    if (r.trade_term) {
-      const term = String(r.trade_term).toUpperCase()
-      const valid = TRADE_TERMS.map((t) => t.code)
-      if (valid.includes(term)) {
-        setQuoteDetails((prev) => ({ ...prev, tradeTerm: term }))
-      }
-    }
     if (r.payment_terms) {
       setQuoteDetails((prev) => ({ ...prev, paymentTerms: String(r.payment_terms) }))
     }
@@ -978,7 +1177,7 @@ export default function QuotePage() {
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">目标货币</label>
-                <Select value={formData.currency} onValueChange={handleCurrencyChange}>
+                <Select value={formData.currency} onValueChange={(v) => v && handleCurrencyChange(v)}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -1055,27 +1254,16 @@ export default function QuotePage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b bg-gray-50">
-                        <th className="text-left p-3 font-medium text-gray-500">贸易术语</th>
+                        <th className="text-left p-3 font-medium text-gray-500">贸易术语（报价输出）</th>
                         <th className="text-right p-3 font-medium text-gray-500">{formData.currency} 合计</th>
                         <th className="text-right p-3 font-medium text-gray-500">CNY 合计</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {multiResults.orderTotals.map((r) => {
-                        const isSelected = r.term === quoteDetails.tradeTerm
-                        const isHighlighted = r.term === 'FOB' || r.term === 'CIF'
-                        return (
-                          <tr
-                            key={r.term}
-                            onClick={() => setQuoteDetails((prev) => ({ ...prev, tradeTerm: r.term }))}
-                            className={`border-b cursor-pointer transition-colors ${
-                              isSelected
-                                ? 'bg-blue-50 border-l-2 border-l-blue-500'
-                                : isHighlighted
-                                ? 'hover:bg-gray-50 text-blue-700 font-medium'
-                                : 'hover:bg-gray-50'
-                            }`}
-                          >
+                      {multiResults.orderTotals
+                        .filter((r) => r.term === OUTPUT_TRADE_TERM)
+                        .map((r) => (
+                          <tr key={r.term} className="border-b bg-blue-50 border-l-2 border-l-blue-500">
                             <td className="p-3">
                               <span className="font-mono font-medium">{r.term}</span>
                               <span className="text-xs text-gray-400 ml-2">
@@ -1089,11 +1277,10 @@ export default function QuotePage() {
                               ¥{r.priceCNY.toFixed(2)}
                             </td>
                           </tr>
-                        )
-                      })}
+                        ))}
                     </tbody>
                   </table>
-                  <p className="text-xs text-gray-400 p-3">点击行可选择贸易术语</p>
+                  <p className="text-xs text-gray-400 p-3">报价单与 PDF 均按 {OUTPUT_TRADE_TERM} 生成（计算器仍可按各术语核算成本）</p>
                 </CardContent>
               </Card>
 
@@ -1107,14 +1294,14 @@ export default function QuotePage() {
                       className="flex items-center gap-2 text-sm font-medium text-gray-700 w-full"
                     >
                       {showDetail ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                      产品明细（{quoteDetails.tradeTerm}）
+                      产品明细（{OUTPUT_TRADE_TERM}）
                     </button>
                     {showDetail && (
                       <div className="mt-3 space-y-2">
                         {multiResults.byProduct.map(({ productId, results }) => {
                           const calc = calcProducts.find((p) => p.id === productId)
                           if (!calc) return null
-                          const r = results.find((r) => r.term === quoteDetails.tradeTerm)
+                          const r = results.find((r) => r.term === OUTPUT_TRADE_TERM)
                           if (!r) return null
                           const qty = parseFloat(calc.quantity) || 1
                           return (
@@ -1129,7 +1316,7 @@ export default function QuotePage() {
                         <div className="flex justify-between text-xs font-bold border-t pt-2 px-3">
                           <span>合计</span>
                           <span className="text-blue-700">
-                            {sym}{(multiResults.orderTotals.find((r) => r.term === quoteDetails.tradeTerm)?.priceForeign || 0).toFixed(2)}
+                            {sym}{(multiResults.orderTotals.find((r) => r.term === OUTPUT_TRADE_TERM)?.priceForeign || 0).toFixed(2)}
                           </span>
                         </div>
                       </div>
@@ -1137,6 +1324,188 @@ export default function QuotePage() {
                   </CardContent>
                 </Card>
               )}
+
+              <Card>
+                <CardContent className="p-4 space-y-3">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <h3 className="font-semibold text-sm">产品报价（PDF 明细 · {OUTPUT_TRADE_TERM}）</h3>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="inline-flex rounded-md border border-gray-200 bg-white p-0.5 text-xs">
+                        <button
+                          type="button"
+                          className={`rounded px-2 py-1 ${quoteLayoutMode === 'product_list' ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                          onClick={() => {
+                            setQuoteLayoutMode('product_list')
+                            setPdfProducts((prev) => prev.filter((r) => !r.isContainerHeader))
+                          }}
+                        >
+                          产品列表
+                        </button>
+                        <button
+                          type="button"
+                          className={`rounded px-2 py-1 ${quoteLayoutMode === 'container_group' ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                          onClick={() => {
+                            setQuoteLayoutMode('container_group')
+                            setPdfProducts((prev) => {
+                              if (prev.some((r) => r.isContainerHeader)) return prev
+                              return [emptyContainerHeaderRow(), ...prev]
+                            })
+                          }}
+                        >
+                          按货柜分组
+                        </button>
+                      </div>
+                      {quoteLayoutMode === 'container_group' && (
+                        <button
+                          type="button"
+                          className="text-xs text-amber-700 hover:underline"
+                          onClick={() => setPdfProducts((prev) => [...prev, emptyContainerHeaderRow()])}
+                        >
+                          + 货柜标题
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="text-xs text-blue-600 hover:underline"
+                        onClick={() => {
+                          const price = selectedTradeResult?.priceForeign || 0
+                          setPdfProducts((prev) => [...prev, emptyProductPdfRow(price)])
+                        }}
+                      >
+                        + 添加行
+                      </button>
+                    </div>
+                  </div>
+                  <div className="border rounded-lg overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="text-left p-2 font-medium text-gray-500">产品名称</th>
+                          <th className="text-right p-2 font-medium text-gray-500 w-16">数量</th>
+                          <th className="text-right p-2 font-medium text-gray-500 w-20">单价</th>
+                          <th className="text-right p-2 font-medium text-gray-500 w-20">小计</th>
+                          <th className="p-2 w-6"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pdfProducts.map((row, idx) =>
+                          row.isContainerHeader ? (
+                            <tr key={idx} className="border-t bg-amber-50/80">
+                              <td className="p-1" colSpan={4}>
+                                <input
+                                  className="w-full text-xs border border-amber-200 rounded px-1 py-0.5 focus:outline-blue-400 font-medium"
+                                  value={row.name}
+                                  onChange={(e) => {
+                                    const u = [...pdfProducts]
+                                    u[idx] = { ...u[idx], name: e.target.value }
+                                    setPdfProducts(u)
+                                  }}
+                                  placeholder="货柜 / 分组标题（如 1×40HQ）"
+                                />
+                              </td>
+                              <td className="p-1 text-center">
+                                {pdfProducts.length > 1 && (
+                                  <button
+                                    type="button"
+                                    className="text-red-400 hover:text-red-600"
+                                    onClick={() => setPdfProducts((prev) => prev.filter((_, i) => i !== idx))}
+                                  >
+                                    ×
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          ) : (
+                            <tr key={idx} className="border-t">
+                              <td className="p-1">
+                                <input
+                                  className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
+                                  value={row.name}
+                                  onChange={(e) => {
+                                    const u = [...pdfProducts]
+                                    u[idx] = { ...u[idx], name: e.target.value }
+                                    setPdfProducts(u)
+                                  }}
+                                  placeholder="产品名称"
+                                />
+                              </td>
+                              <td className="p-1">
+                                <input
+                                  type="number"
+                                  className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
+                                  value={row.qty}
+                                  onChange={(e) => {
+                                    const qty = parseFloat(e.target.value) || 1
+                                    const u = [...pdfProducts]
+                                    u[idx] = {
+                                      ...u[idx],
+                                      qty,
+                                      amount_foreign: qty * u[idx].unit_price_foreign,
+                                    }
+                                    setPdfProducts(u)
+                                  }}
+                                />
+                              </td>
+                              <td className="p-1">
+                                <input
+                                  type="number"
+                                  className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
+                                  value={row.unit_price_foreign.toFixed(4)}
+                                  onChange={(e) => {
+                                    const price = parseFloat(e.target.value) || 0
+                                    const u = [...pdfProducts]
+                                    u[idx] = {
+                                      ...u[idx],
+                                      unit_price_foreign: price,
+                                      amount_foreign: price * u[idx].qty,
+                                    }
+                                    setPdfProducts(u)
+                                  }}
+                                />
+                              </td>
+                              <td className="p-2 text-right font-medium">
+                                {sym}
+                                {row.amount_foreign.toFixed(2)}
+                              </td>
+                              <td className="p-1 text-center">
+                                {pdfProducts.length > 1 && (
+                                  <button
+                                    type="button"
+                                    className="text-red-400 hover:text-red-600"
+                                    onClick={() => setPdfProducts((prev) => prev.filter((_, i) => i !== idx))}
+                                  >
+                                    ×
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          )
+                        )}
+                      </tbody>
+                      <tfoot className="bg-gray-50 border-t">
+                        <tr>
+                          <td colSpan={3} className="p-2 text-right text-xs font-bold text-gray-600">
+                            合计
+                          </td>
+                          <td className="p-2 text-right text-xs font-bold text-blue-700">
+                            {sym}
+                            {pdfProducts
+                              .filter((p) => !p.isContainerHeader)
+                              .reduce((s, p) => s + p.amount_foreign, 0)
+                              .toFixed(2)}
+                          </td>
+                          <td></td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                  <p className="text-xs text-gray-400">
+                    {quoteLayoutMode === 'container_group'
+                      ? '货柜标题行仅用于 PDF 分组与小计；产品行仍与左侧成本计算器顺序对应。'
+                      : '与左侧成本行按顺序对应；可添加额外明细行（无对应成本时成本记为 0）。'}
+                  </p>
+                </CardContent>
+              </Card>
 
               <Button className="w-full" onClick={openQuoteDialog}>
                 <FileText className="mr-2 h-4 w-4" />
@@ -1304,111 +1673,106 @@ export default function QuotePage() {
                 )}
               </div>
 
-              {/* Trade Term + Type */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">贸易术语</label>
-                  <Select value={quoteDetails.tradeTerm} onValueChange={(v) => setQuoteDetails({ ...quoteDetails, tradeTerm: v || quoteDetails.tradeTerm })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {(multiResults?.orderTotals || []).map((r) => (
-                        <SelectItem key={r.term} value={r.term}>
-                          {r.term} — {sym}{formatPrice(r.priceForeign)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">单据类型</label>
-                  <Select value={quoteDetails.type} onValueChange={(v) => setQuoteDetails({ ...quoteDetails, type: (v || quoteDetails.type) as 'QUOTATION' | 'PI' })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="QUOTATION">Quotation</SelectItem>
-                      <SelectItem value="PI">Proforma Invoice</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">单据类型</label>
+                <Select
+                  value={quoteDetails.documentKind}
+                  onValueChange={(v) =>
+                    setQuoteDetails({
+                      ...quoteDetails,
+                      documentKind: (v || quoteDetails.documentKind) as 'QUOTATION' | 'PL' | 'PI' | 'CI',
+                    })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="QUOTATION">Quotation</SelectItem>
+                    <SelectItem value="PI">Proforma Invoice (PI)</SelectItem>
+                    <SelectItem value="PL">Packing List (PL)</SelectItem>
+                    <SelectItem value="CI">Commercial Invoice (CI)</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
-              {/* Product rows */}
+              {quoteDetails.documentKind === 'PI' && (
+                <>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">PO#（客户订单号）</label>
+                    <Input
+                      value={quoteDetails.poNumber}
+                      onChange={(e) =>
+                        setQuoteDetails({ ...quoteDetails, poNumber: e.target.value })
+                      }
+                      placeholder="Buyer PO number（可空）"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">存款比例（%）</label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={0.5}
+                      value={quoteDetails.depositPercent}
+                      onChange={(e) =>
+                        setQuoteDetails({
+                          ...quoteDetails,
+                          depositPercent: e.target.value,
+                        })
+                      }
+                      placeholder="如 30"
+                    />
+                  </div>
+                </>
+              )}
+
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-sm font-medium">产品明细</label>
-                  <button
-                    type="button"
-                    className="text-xs text-blue-600 hover:underline"
-                    onClick={() => {
-                      const price = selectedTradeResult?.priceForeign || 0
-                      setPdfProducts((prev) => [...prev, { name: '', model: '', specs: '', qty: 1, unit: 'pc', unit_price_foreign: price, amount_foreign: price }])
-                    }}
-                  >
-                    + 添加行
-                  </button>
-                </div>
-                <div className="border rounded-lg overflow-hidden">
-                  <table className="w-full text-xs">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="text-left p-2 font-medium text-gray-500">产品名称</th>
-                        <th className="text-right p-2 font-medium text-gray-500 w-16">数量</th>
-                        <th className="text-right p-2 font-medium text-gray-500 w-20">单价</th>
-                        <th className="text-right p-2 font-medium text-gray-500 w-20">小计</th>
-                        <th className="p-2 w-6"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {pdfProducts.map((row, idx) => (
-                        <tr key={idx} className="border-t">
-                          <td className="p-1">
-                            <input
-                              className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
-                              value={row.name}
-                              onChange={(e) => { const u = [...pdfProducts]; u[idx] = { ...u[idx], name: e.target.value }; setPdfProducts(u) }}
-                              placeholder="产品名称"
-                            />
-                          </td>
-                          <td className="p-1">
-                            <input
-                              type="number"
-                              className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
-                              value={row.qty}
-                              onChange={(e) => {
-                                const qty = parseFloat(e.target.value) || 1
-                                const u = [...pdfProducts]; u[idx] = { ...u[idx], qty, amount_foreign: qty * u[idx].unit_price_foreign }; setPdfProducts(u)
-                              }}
-                            />
-                          </td>
-                          <td className="p-1">
-                            <input
-                              type="number"
-                              className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
-                              value={row.unit_price_foreign.toFixed(4)}
-                              onChange={(e) => {
-                                const price = parseFloat(e.target.value) || 0
-                                const u = [...pdfProducts]; u[idx] = { ...u[idx], unit_price_foreign: price, amount_foreign: price * u[idx].qty }; setPdfProducts(u)
-                              }}
-                            />
-                          </td>
-                          <td className="p-2 text-right font-medium">{sym}{row.amount_foreign.toFixed(2)}</td>
-                          <td className="p-1 text-center">
-                            {pdfProducts.length > 1 && (
-                              <button type="button" className="text-red-400 hover:text-red-600" onClick={() => setPdfProducts((prev) => prev.filter((_, i) => i !== idx))}>×</button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot className="bg-gray-50 border-t">
-                      <tr>
-                        <td colSpan={3} className="p-2 text-right text-xs font-bold text-gray-600">合计</td>
-                        <td className="p-2 text-right text-xs font-bold text-blue-700">{sym}{pdfProducts.reduce((s, p) => s + p.amount_foreign, 0).toFixed(2)}</td>
-                        <td></td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
+                <label className="text-sm font-medium">自定义单号（可选）</label>
+                <Input
+                  value={quoteDetails.referenceNumber}
+                  onChange={(e) => setQuoteDetails({ ...quoteDetails, referenceNumber: e.target.value })}
+                  placeholder="留空则使用系统编号 LS-..."
+                />
               </div>
+
+              {quoteDetails.documentKind === 'PL' && (
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="rounded border-gray-300"
+                    checked={quoteDetails.sellerVisiblePl}
+                    onChange={(e) => setQuoteDetails({ ...quoteDetails, sellerVisiblePl: e.target.checked })}
+                  />
+                  PL 上显示我司名称与抬头
+                </label>
+              )}
+              {(quoteDetails.documentKind === 'PI' ||
+                quoteDetails.documentKind === 'QUOTATION') && (
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="rounded border-gray-300"
+                    checked={quoteDetails.sellerVisiblePi}
+                    onChange={(e) => setQuoteDetails({ ...quoteDetails, sellerVisiblePi: e.target.checked })}
+                  />
+                  {quoteDetails.documentKind === 'QUOTATION'
+                    ? 'Quotation 上显示我司名称与抬头'
+                    : 'PI 上显示我司名称与抬头'}
+                </label>
+              )}
+              {quoteDetails.documentKind === 'CI' && (
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="rounded border-gray-300"
+                    checked={quoteDetails.sellerVisibleCi}
+                    onChange={(e) => setQuoteDetails({ ...quoteDetails, sellerVisibleCi: e.target.checked })}
+                  />
+                  CI 上显示我司名称与抬头
+                </label>
+              )}
 
               {/* Payment Terms */}
               <div className="space-y-2">

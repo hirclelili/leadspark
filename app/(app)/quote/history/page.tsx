@@ -38,7 +38,16 @@ interface Quotation {
 }
 
 const CURRENCY_SYMBOL: Record<string, string> = {
-  USD: '$', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$', AED: 'AED ', SGD: 'S$',
+  USD: '$',
+  EUR: '€',
+  GBP: '£',
+  JPY: '¥',
+  AUD: 'A$',
+  CAD: 'C$',
+  AED: 'AED ',
+  SGD: 'S$',
+  CNY: '¥',
+  HKD: 'HK$',
 }
 
 function getDateRange(range: string): { date_from: string; date_to: string } {
@@ -114,15 +123,17 @@ export default function QuoteHistoryPage() {
     }, 300)
   }
 
-  const handleStatusChange = (value: string) => {
-    const v = value === 'all' ? '' : value
+  const handleStatusChange = (value: string | null) => {
+    const raw = value ?? 'all'
+    const v = raw === 'all' ? '' : raw
     setStatusFilter(v)
     setPage(1)
     updateURL(search, v, dateRange)
   }
 
-  const handleDateRangeChange = (value: string) => {
-    const v = value === 'all' ? '' : value
+  const handleDateRangeChange = (value: string | null) => {
+    const raw = value ?? 'all'
+    const v = raw === 'all' ? '' : raw
     setDateRange(v)
     setPage(1)
     updateURL(search, statusFilter, v)

@@ -7,6 +7,7 @@ import {
   StyleSheet,
   Image,
 } from '@react-pdf/renderer'
+import { amountInWordsEn } from '@/lib/amountInWords'
 
 const styles = StyleSheet.create({
   page: {
@@ -116,9 +117,16 @@ const styles = StyleSheet.create({
   },
   totalRow: {
     flexDirection: 'row',
-    width: 150,
+    width: 220,
     justifyContent: 'space-between',
     marginBottom: 4,
+  },
+  totalRowWide: {
+    flexDirection: 'row',
+    width: 280,
+    justifyContent: 'space-between',
+    marginBottom: 4,
+    alignSelf: 'flex-end',
   },
   totalLabel: {
     fontFamily: 'Helvetica-Bold',
@@ -175,7 +183,55 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: '#666',
   },
+  amountWords: {
+    marginBottom: 12,
+    padding: 8,
+    backgroundColor: '#f9f9f9',
+    fontSize: 9,
+    color: '#333',
+  },
+  containerHeaderRow: {
+    flexDirection: 'row',
+    padding: 8,
+    backgroundColor: '#ececec',
+    borderBottomWidth: 1,
+    borderBottomColor: '#ddd',
+  },
+  containerHeaderText: {
+    fontSize: 10,
+    fontFamily: 'Helvetica-Bold',
+    flex: 1,
+  },
+  subtotalRow: {
+    flexDirection: 'row',
+    padding: 6,
+    paddingLeft: 38,
+    backgroundColor: '#fafafa',
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+    justifyContent: 'flex-end',
+    gap: 12,
+  },
+  subtotalLabel: {
+    fontSize: 9,
+    fontFamily: 'Helvetica-Bold',
+    color: '#444',
+  },
+  subtotalValue: {
+    fontSize: 9,
+    fontFamily: 'Helvetica-Bold',
+    width: 70,
+    textAlign: 'right',
+  },
+  dualSignRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 24,
+    marginTop: 8,
+  },
 })
+
+export type QuoteLayoutMode = 'product_list' | 'container_group'
 
 interface Product {
   name: string
@@ -185,7 +241,11 @@ interface Product {
   unit: string
   unit_price_foreign: number
   amount_foreign: number
+  /** Packing / section title row (no qty or price). */
+  is_container_header?: boolean
 }
+
+export type DocumentKind = 'QUOTATION' | 'PI' | 'CI' | 'PL'
 
 interface QuotationPDFProps {
   companyName: string
@@ -213,7 +273,19 @@ interface QuotationPDFProps {
   deliveryTime: string
   packing?: string
   remarks?: string
+  /** @deprecated use documentKind */
   type?: 'QUOTATION' | 'PI'
+  documentKind?: DocumentKind
+  /** Packing list vs container sections (subtotals in PDF when grouped). */
+  quoteMode?: QuoteLayoutMode
+  /** When false, hide seller logo, name, and address (PL/PI 中间商场景). */
+  showSellerHeader?: boolean
+  /** Shown as document “No.” — use custom PI/CI reference or fallback to quotationNumber. */
+  documentNumberDisplay?: string
+  /** Buyer’s PO (shown on PI when set). */
+  poNumber?: string
+  /** Deposit % for PI (0–100). */
+  depositPercent?: number
 }
 
 export function QuotationPDF({
@@ -243,15 +315,160 @@ export function QuotationPDF({
   packing,
   remarks,
   type = 'QUOTATION',
+  documentKind: documentKindProp,
+  quoteMode = 'product_list',
+  showSellerHeader = true,
+  documentNumberDisplay,
+  poNumber,
+  depositPercent = 0,
 }: QuotationPDFProps) {
-  const SYMBOL_MAP: Record<string, string> = {
-    USD: '$', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$', AED: 'AED ', SGD: 'S$',
+  const documentKind: DocumentKind =
+    documentKindProp ?? (type === 'PI' ? 'PI' : 'QUOTATION')
+
+  const titleForKind: Record<DocumentKind, string> = {
+    QUOTATION: 'QUOTATION',
+    PL: 'PACKING LIST',
+    PI: 'PROFORMA INVOICE',
+    CI: 'COMMERCIAL INVOICE',
   }
-  const currencySymbol = SYMBOL_MAP[currency] || currency + ' '
+
+  const noLine = documentNumberDisplay?.trim() || quotationNumber
+
+  const SYMBOL_MAP: Record<string, string> = {
+    USD: '$',
+    EUR: '€',
+    GBP: '£',
+    JPY: '¥',
+    AUD: 'A$',
+    CAD: 'C$',
+    AED: 'AED ',
+    SGD: 'S$',
+    CNY: '¥',
+    HKD: 'HK$',
+  }
+  const currencySymbol = SYMBOL_MAP[currency] || `${currency} `
 
   const formatPrice = (price: number) => {
     return `${currencySymbol}${price.toFixed(2)}`
   }
+
+  const isPackingList = documentKind === 'PL'
+  const isPi = documentKind === 'PI'
+  const isQuotation = documentKind === 'QUOTATION'
+  const showPricing = isPi || documentKind === 'CI' || isQuotation
+  /** PI: always show bank when present; Quotation: keep template light (no bank block). */
+  const showBank =
+    (bankName || bankAccount) &&
+    (isPi || documentKind === 'CI') &&
+    !isQuotation
+
+  const sigBlock = showSellerHeader ? companyName : 'Seller'
+
+  const depositPct = Math.min(100, Math.max(0, Number(depositPercent) || 0))
+  const depositAmount =
+    isPi && depositPct > 0 ? (totalAmount * depositPct) / 100 : 0
+  const balanceAfterDeposit = totalAmount - depositAmount
+
+  const isContainerMode = quoteMode === 'container_group'
+
+  /** Build rendering slices: flat rows, or grouped with subtotal lines inserted. */
+  type PricedSlice =
+    | { kind: 'header'; title: string }
+    | { kind: 'product'; product: Product; lineNo: number }
+    | { kind: 'subtotal'; amount: number }
+
+  type PlSlice = { kind: 'header'; title: string } | { kind: 'product'; product: Product; lineNo: number }
+
+  function buildPricedSlices(prods: Product[]): PricedSlice[] {
+    if (!isContainerMode) {
+      let n = 0
+      const out: PricedSlice[] = []
+      for (const product of prods) {
+        if (product.is_container_header) {
+          out.push({ kind: 'header', title: product.name })
+          continue
+        }
+        n += 1
+        out.push({ kind: 'product', product, lineNo: n })
+      }
+      return out
+    }
+    const groups: { header?: string; items: Product[] }[] = []
+    let cur: { header?: string; items: Product[] } = { items: [] }
+    for (const p of prods) {
+      if (p.is_container_header) {
+        if (cur.items.length > 0 || cur.header) {
+          groups.push(cur)
+        }
+        cur = { header: p.name, items: [] }
+      } else {
+        cur.items.push(p)
+      }
+    }
+    if (cur.items.length > 0 || cur.header) groups.push(cur)
+
+    const slices: PricedSlice[] = []
+    let lineNo = 0
+    for (const g of groups) {
+      if (g.header) {
+        slices.push({ kind: 'header', title: g.header })
+      }
+      for (const product of g.items) {
+        lineNo += 1
+        slices.push({ kind: 'product', product, lineNo })
+      }
+      if (g.items.length > 0) {
+        const sub = g.items.reduce((s, x) => s + (x.amount_foreign || 0), 0)
+        slices.push({ kind: 'subtotal', amount: sub })
+      }
+    }
+    return slices
+  }
+
+  function buildPlSlices(prods: Product[]): PlSlice[] {
+    if (!isContainerMode) {
+      let n = 0
+      const out: PlSlice[] = []
+      for (const product of prods) {
+        if (product.is_container_header) {
+          out.push({ kind: 'header', title: product.name })
+          continue
+        }
+        n += 1
+        out.push({ kind: 'product', product, lineNo: n })
+      }
+      return out
+    }
+    const groups: { header?: string; items: Product[] }[] = []
+    let cur: { header?: string; items: Product[] } = { items: [] }
+    for (const p of prods) {
+      if (p.is_container_header) {
+        if (cur.items.length > 0 || cur.header) {
+          groups.push(cur)
+        }
+        cur = { header: p.name, items: [] }
+      } else {
+        cur.items.push(p)
+      }
+    }
+    if (cur.items.length > 0 || cur.header) groups.push(cur)
+
+    const slices: PlSlice[] = []
+    let lineNo = 0
+    for (const g of groups) {
+      if (g.header) {
+        slices.push({ kind: 'header', title: g.header })
+      }
+      for (const product of g.items) {
+        lineNo += 1
+        slices.push({ kind: 'product', product, lineNo })
+      }
+    }
+    return slices
+  }
+
+  const pricedSlices = showPricing && !isPackingList ? buildPricedSlices(products) : []
+  const plSlices = isPackingList ? buildPlSlices(products) : []
 
   return (
     <Document>
@@ -259,23 +476,27 @@ export function QuotationPDF({
         {/* Header */}
         <View style={styles.header}>
           <View style={styles.companySection}>
-            {logoUrl && (
+            {showSellerHeader && logoUrl && (
               <Image src={logoUrl} style={{ width: 100, marginBottom: 10 }} />
             )}
-            <Text style={styles.companyName}>{companyName}</Text>
-            {companyNameCn && (
-              <Text style={styles.companyInfo}>{companyNameCn}</Text>
+            {showSellerHeader && (
+              <>
+                <Text style={styles.companyName}>{companyName}</Text>
+                {companyNameCn && (
+                  <Text style={styles.companyInfo}>{companyNameCn}</Text>
+                )}
+                {address && <Text style={styles.companyInfo}>{address}</Text>}
+                {phone && <Text style={styles.companyInfo}>Tel: {phone}</Text>}
+                {email && <Text style={styles.companyInfo}>Email: {email}</Text>}
+                {website && <Text style={styles.companyInfo}>Web: {website}</Text>}
+              </>
             )}
-            {address && <Text style={styles.companyInfo}>{address}</Text>}
-            {phone && <Text style={styles.companyInfo}>Tel: {phone}</Text>}
-            {email && <Text style={styles.companyInfo}>Email: {email}</Text>}
-            {website && <Text style={styles.companyInfo}>Web: {website}</Text>}
           </View>
           <View style={styles.titleSection}>
             <Text style={styles.title}>
-              {type === 'PI' ? 'PROFORMA INVOICE' : 'QUOTATION'}
+              {titleForKind[documentKind] ?? 'QUOTATION'}
             </Text>
-            <Text style={styles.quoteNumber}>No: {quotationNumber}</Text>
+            <Text style={styles.quoteNumber}>No: {noLine}</Text>
           </View>
         </View>
 
@@ -285,14 +506,24 @@ export function QuotationPDF({
             <Text style={styles.label}>Date:</Text>
             <Text style={styles.value}>{date}</Text>
           </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Valid for:</Text>
-            <Text style={styles.value}>{validityDays} days</Text>
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Trade Term:</Text>
-            <Text style={styles.value}>{tradeTerm}</Text>
-          </View>
+          {!isPackingList && (
+            <>
+              <View style={styles.row}>
+                <Text style={styles.label}>Valid for:</Text>
+                <Text style={styles.value}>{validityDays} days</Text>
+              </View>
+              <View style={styles.row}>
+                <Text style={styles.label}>Trade Term:</Text>
+                <Text style={styles.value}>{tradeTerm}</Text>
+              </View>
+              {isPi && poNumber?.trim() ? (
+                <View style={styles.row}>
+                  <Text style={styles.label}>Buyer&apos;s PO:</Text>
+                  <Text style={styles.value}>{poNumber.trim()}</Text>
+                </View>
+              ) : null}
+            </>
+          )}
         </View>
 
         {/* Client Section */}
@@ -305,53 +536,130 @@ export function QuotationPDF({
 
         {/* Products Table */}
         <View style={styles.table}>
-          <View style={styles.tableHeader}>
-            <Text style={[styles.tableHeaderCell, styles.itemCell]}>No.</Text>
-            <Text style={[styles.tableHeaderCell, styles.descCell]}>
-              Product / Description
-            </Text>
-            <Text style={[styles.tableHeaderCell, styles.qtyCell]}>Qty</Text>
-            <Text style={[styles.tableHeaderCell, styles.priceCell]}>Unit Price</Text>
-            <Text style={[styles.tableHeaderCell, styles.amountCell]}>Amount</Text>
-          </View>
-          {products.map((product, index) => (
-            <View key={index} style={styles.tableRow}>
-              <Text style={styles.itemCell}>{index + 1}</Text>
-              <Text style={styles.descCell}>
-                {product.name}
-                {product.model && ` (${product.model})`}
-                {product.specs && `\n${product.specs}`}
-              </Text>
-              <Text style={styles.qtyCell}>
-                {product.qty} {product.unit}
-              </Text>
-              <Text style={styles.priceCell}>
-                {formatPrice(product.unit_price_foreign)}
-              </Text>
-              <Text style={styles.amountCell}>
-                {formatPrice(product.amount_foreign)}
-              </Text>
-            </View>
-          ))}
+          {isPackingList ? (
+            <>
+              <View style={styles.tableHeader}>
+                <Text style={[styles.tableHeaderCell, styles.itemCell]}>No.</Text>
+                <Text style={[styles.tableHeaderCell, styles.descCell]}>
+                  Description
+                </Text>
+                <Text style={[styles.tableHeaderCell, styles.qtyCell]}>Qty</Text>
+                <Text style={[styles.tableHeaderCell, { width: 50, fontSize: 9, fontFamily: 'Helvetica-Bold' }]}>Unit</Text>
+              </View>
+              {plSlices.map((slice, index) =>
+                slice.kind === 'header' ? (
+                  <View key={`pl-h-${index}`} style={styles.containerHeaderRow}>
+                    <Text style={styles.containerHeaderText}>{slice.title}</Text>
+                  </View>
+                ) : (
+                  <View key={`pl-p-${index}`} style={styles.tableRow}>
+                    <Text style={styles.itemCell}>{slice.lineNo}</Text>
+                    <Text style={styles.descCell}>
+                      {slice.product.name}
+                      {slice.product.model && ` (${slice.product.model})`}
+                      {slice.product.specs && `\n${slice.product.specs}`}
+                    </Text>
+                    <Text style={styles.qtyCell}>{slice.product.qty}</Text>
+                    <Text style={{ width: 50, fontSize: 9 }}>{slice.product.unit}</Text>
+                  </View>
+                )
+              )}
+            </>
+          ) : (
+            <>
+              <View style={styles.tableHeader}>
+                <Text style={[styles.tableHeaderCell, styles.itemCell]}>No.</Text>
+                <Text style={[styles.tableHeaderCell, styles.descCell]}>
+                  Product / Description
+                </Text>
+                <Text style={[styles.tableHeaderCell, styles.qtyCell]}>Qty</Text>
+                <Text style={[styles.tableHeaderCell, styles.priceCell]}>Unit Price</Text>
+                <Text style={[styles.tableHeaderCell, styles.amountCell]}>Amount</Text>
+              </View>
+              {pricedSlices.map((slice, index) =>
+                slice.kind === 'header' ? (
+                  <View key={`pr-h-${index}`} style={styles.containerHeaderRow}>
+                    <Text style={styles.containerHeaderText}>{slice.title}</Text>
+                  </View>
+                ) : slice.kind === 'subtotal' ? (
+                  <View key={`pr-s-${index}`} style={[styles.tableRow, { backgroundColor: '#fafafa' }]}>
+                    <Text style={styles.itemCell} />
+                    <Text style={[styles.descCell, { fontFamily: 'Helvetica-Bold' }]}>Subtotal</Text>
+                    <Text style={styles.qtyCell} />
+                    <Text style={styles.priceCell} />
+                    <Text style={[styles.amountCell, { fontFamily: 'Helvetica-Bold' }]}>
+                      {formatPrice(slice.amount)}
+                    </Text>
+                  </View>
+                ) : (
+                  <View key={`pr-p-${index}`} style={styles.tableRow}>
+                    <Text style={styles.itemCell}>{slice.lineNo}</Text>
+                    <Text style={styles.descCell}>
+                      {slice.product.name}
+                      {slice.product.model && ` (${slice.product.model})`}
+                      {slice.product.specs && `\n${slice.product.specs}`}
+                    </Text>
+                    <Text style={styles.qtyCell}>
+                      {slice.product.qty} {slice.product.unit}
+                    </Text>
+                    <Text style={styles.priceCell}>
+                      {formatPrice(slice.product.unit_price_foreign)}
+                    </Text>
+                    <Text style={styles.amountCell}>
+                      {formatPrice(slice.product.amount_foreign)}
+                    </Text>
+                  </View>
+                )
+              )}
+            </>
+          )}
         </View>
 
         {/* Totals */}
-        <View style={styles.totalsSection}>
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Total:</Text>
-            <Text style={styles.totalValue}>{formatPrice(totalAmount)}</Text>
+        {showPricing && (
+          <View style={styles.totalsSection}>
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Total:</Text>
+              <Text style={styles.totalValue}>{formatPrice(totalAmount)}</Text>
+            </View>
+            {isPi && depositPct > 0 ? (
+              <>
+                <View style={styles.totalRowWide}>
+                  <Text style={styles.totalLabel}>
+                    Deposit ({depositPct}%):
+                  </Text>
+                  <Text style={styles.totalValue}>{formatPrice(depositAmount)}</Text>
+                </View>
+                <View style={styles.totalRowWide}>
+                  <Text style={styles.totalLabel}>Balance (after deposit):</Text>
+                  <Text style={styles.totalValue}>
+                    {formatPrice(balanceAfterDeposit)}
+                  </Text>
+                </View>
+              </>
+            ) : null}
           </View>
-        </View>
+        )}
+
+        {isPi && showPricing ? (
+          <View style={styles.amountWords}>
+            <Text>{amountInWordsEn(totalAmount, currency)}</Text>
+          </View>
+        ) : null}
 
         {/* Payment Terms */}
-        <View style={styles.row}>
-          <Text style={styles.label}>Payment Terms:</Text>
-          <Text style={styles.value}>{paymentTerms}</Text>
-        </View>
-        <View style={styles.row}>
-          <Text style={styles.label}>Delivery Time:</Text>
-          <Text style={styles.value}>{deliveryTime}</Text>
-        </View>
+        {!isPackingList && (
+          <>
+            <View style={styles.row}>
+              <Text style={styles.label}>Payment Terms:</Text>
+              <Text style={styles.value}>{paymentTerms}</Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>Delivery Time:</Text>
+              <Text style={styles.value}>{deliveryTime}</Text>
+            </View>
+          </>
+        )}
         {packing && (
           <View style={styles.row}>
             <Text style={styles.label}>Packing:</Text>
@@ -368,7 +676,7 @@ export function QuotationPDF({
         )}
 
         {/* Bank Info */}
-        {(bankName || bankAccount) && (
+        {showBank && (
           <View style={styles.bankSection}>
             <Text style={[styles.sectionTitle, { fontSize: 10, marginBottom: 6 }]}>
               Banking Information:
@@ -400,13 +708,28 @@ export function QuotationPDF({
           </View>
         )}
 
-        {/* Footer */}
+        {/* Footer / signatures */}
         <View style={styles.footer}>
-          <View style={styles.signature}>
-            <Text style={styles.signatureLabel}>{companyName}</Text>
-            <View style={styles.signatureLine} />
-            <Text style={styles.signatureLabel}>Authorized Signature</Text>
-          </View>
+          {isPi ? (
+            <View style={styles.dualSignRow}>
+              <View style={[styles.signature, { flex: 1 }]}>
+                <Text style={styles.signatureLabel}>Buyer</Text>
+                <View style={styles.signatureLine} />
+                <Text style={styles.signatureLabel}>Authorized Signature</Text>
+              </View>
+              <View style={[styles.signature, { flex: 1 }]}>
+                <Text style={styles.signatureLabel}>{sigBlock}</Text>
+                <View style={styles.signatureLine} />
+                <Text style={styles.signatureLabel}>Authorized Signature</Text>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.signature}>
+              <Text style={styles.signatureLabel}>{sigBlock}</Text>
+              <View style={styles.signatureLine} />
+              <Text style={styles.signatureLabel}>Authorized Signature</Text>
+            </View>
+          )}
         </View>
       </Page>
     </Document>

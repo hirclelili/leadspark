@@ -7,7 +7,8 @@ import {
   ArrowLeft, Download, Building, Loader2, FileText,
   CreditCard, Package, Truck, Hash, Copy, ChevronDown, Send, Sparkles, ClipboardCopy
 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Textarea } from '@/components/ui/textarea'
@@ -18,6 +19,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { toast } from 'sonner'
+import type { DocumentKind, QuoteLayoutMode } from '@/components/pdf/QuotationPDF'
 import { AiSidePanel } from '@/components/AiSidePanel'
 
 const STATUS_CONFIG = {
@@ -44,6 +46,14 @@ interface QuotationDetail {
   remarks: string | null
   created_at: string
   status?: QuoteStatus
+  document_kind?: string | null
+  reference_number?: string | null
+  seller_visible_pl?: boolean | null
+  seller_visible_pi?: boolean | null
+  seller_visible_ci?: boolean | null
+  po_number?: string | null
+  deposit_percent?: number | null
+  quote_mode?: string | null
   products: Array<{
     name: string
     model?: string
@@ -53,6 +63,7 @@ interface QuotationDetail {
     cost_price: number
     unit_price_foreign: number
     amount_foreign: number
+    is_container_header?: boolean
   }>
   costs: {
     domestic_cost: number
@@ -71,7 +82,16 @@ interface QuotationDetail {
 }
 
 const CURRENCY_SYMBOL: Record<string, string> = {
-  USD: '$', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$', AED: 'AED ', SGD: 'S$',
+  USD: '$',
+  EUR: '€',
+  GBP: '£',
+  JPY: '¥',
+  AUD: 'A$',
+  CAD: 'C$',
+  AED: 'AED ',
+  SGD: 'S$',
+  CNY: '¥',
+  HKD: 'HK$',
 }
 
 export default function QuotationDetailPage() {
@@ -110,12 +130,14 @@ export default function QuotationDetailPage() {
             quotation_number: q.quotation_number,
             trade_term: q.trade_term,
             currency: q.currency,
-            products: q.products.map((p) => ({
-              name: p.name,
-              quantity: p.qty,
-              unit: p.unit,
-              unit_price: p.unit_price_foreign,
-            })),
+            products: q.products
+              .filter((p) => !p.is_container_header)
+              .map((p) => ({
+                name: p.name,
+                quantity: p.qty,
+                unit: p.unit,
+                unit_price: p.unit_price_foreign,
+              })),
             total_amount_foreign: q.total_amount_foreign,
             payment_terms: q.payment_terms,
             delivery_time: q.delivery_time,
@@ -181,8 +203,9 @@ export default function QuotationDetailPage() {
 
   const handleDuplicate = () => {
     if (!quotation) return
+    const dataRows = quotation.products.filter((p) => !p.is_container_header)
     const draft = {
-      calcProducts: quotation.products.map((p) => ({
+      calcProducts: dataRows.map((p) => ({
         id: crypto.randomUUID(),
         name: p.name,
         model: p.model || '',
@@ -200,12 +223,43 @@ export default function QuotationDetailPage() {
       },
       quoteDetails: {
         tradeTerm: quotation.trade_term,
+        documentKind: (quotation.document_kind as 'QUOTATION' | 'PL' | 'PI' | 'CI') || 'QUOTATION',
+        referenceNumber: quotation.reference_number || '',
+        poNumber: quotation.po_number || '',
+        depositPercent: String(quotation.deposit_percent ?? 30),
+        sellerVisiblePl: quotation.seller_visible_pl !== false,
+        sellerVisiblePi: quotation.seller_visible_pi !== false,
+        sellerVisibleCi: quotation.seller_visible_ci !== false,
         paymentTerms: quotation.payment_terms,
         deliveryTime: quotation.delivery_time,
         packing: quotation.packing || '',
         remarks: quotation.remarks || '',
         validityDays: quotation.validity_days,
       },
+      quoteLayoutMode: quotation.quote_mode === 'container_group' ? 'container_group' : 'product_list',
+      pdfProducts: quotation.products.map((p) =>
+        p.is_container_header
+          ? {
+              isContainerHeader: true as const,
+              name: p.name,
+              model: p.model || '',
+              specs: p.specs || '',
+              qty: 0,
+              unit: '',
+              unit_price_foreign: 0,
+              amount_foreign: 0,
+            }
+          : {
+              isContainerHeader: false as const,
+              name: p.name,
+              model: p.model || '',
+              specs: p.specs || '',
+              qty: p.qty,
+              unit: p.unit,
+              unit_price_foreign: p.unit_price_foreign,
+              amount_foreign: p.amount_foreign,
+            }
+      ),
     }
     localStorage.setItem('leadspark_quote_draft', JSON.stringify(draft))
     router.push('/quote')
@@ -247,6 +301,14 @@ export default function QuotationDetailPage() {
         year: 'numeric', month: 'long', day: 'numeric',
       })
 
+      const docKind = (quotation.document_kind as DocumentKind) || 'PI'
+      const showSellerHeader =
+        docKind === 'PL'
+          ? quotation.seller_visible_pl !== false
+          : docKind === 'PI' || docKind === 'QUOTATION'
+            ? quotation.seller_visible_pi !== false
+            : quotation.seller_visible_ci !== false
+
       const element = React.createElement(QuotationPDF, {
         companyName: profile?.company_name || 'Your Company',
         companyNameCn: profile?.company_name_cn,
@@ -262,6 +324,7 @@ export default function QuotationDetailPage() {
         clientName: quotation.customers?.company_name || '—',
         clientContact: quotation.customers?.contact_name || undefined,
         quotationNumber: quotation.quotation_number,
+        documentNumberDisplay: (quotation.reference_number && quotation.reference_number.trim()) || quotation.quotation_number,
         date: today,
         validityDays: quotation.validity_days,
         tradeTerm: quotation.trade_term,
@@ -274,16 +337,22 @@ export default function QuotationDetailPage() {
           unit: p.unit,
           unit_price_foreign: p.unit_price_foreign,
           amount_foreign: p.amount_foreign,
+          is_container_header: p.is_container_header === true,
         })),
+        quoteMode: (quotation.quote_mode === 'container_group' ? 'container_group' : 'product_list') as QuoteLayoutMode,
         totalAmount: quotation.total_amount_foreign,
         paymentTerms: quotation.payment_terms,
         deliveryTime: quotation.delivery_time,
         packing: quotation.packing || undefined,
         remarks: quotation.remarks || undefined,
-        type: 'QUOTATION',
+        documentKind: docKind,
+        showSellerHeader,
+        poNumber: quotation.po_number?.trim() || undefined,
+        depositPercent:
+          docKind === 'PI' ? Number(quotation.deposit_percent) || 0 : 0,
       })
 
-      const blob = await pdf(element).toBlob()
+      const blob = await pdf(element as Parameters<typeof pdf>[0]).toBlob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -367,19 +436,18 @@ export default function QuotationDetailPage() {
             {quotation.trade_term}
           </Badge>
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={updatingStatus}
-                className={`text-xs font-medium ${STATUS_CONFIG[quotation.status || 'draft'].color} border-0`}
-              >
-                {updatingStatus ? (
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                ) : null}
-                {STATUS_CONFIG[quotation.status || 'draft'].label}
-                <ChevronDown className="ml-1 h-3 w-3" />
-              </Button>
+            <DropdownMenuTrigger
+              className={cn(
+                buttonVariants({ variant: 'outline', size: 'sm' }),
+                `text-xs font-medium ${STATUS_CONFIG[quotation.status || 'draft'].color} border-0`
+              )}
+              disabled={updatingStatus}
+            >
+              {updatingStatus ? (
+                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+              ) : null}
+              {STATUS_CONFIG[quotation.status || 'draft'].label}
+              <ChevronDown className="ml-1 h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               {(Object.entries(STATUS_CONFIG) as [QuoteStatus, typeof STATUS_CONFIG[QuoteStatus]][]).map(([key, cfg]) => (

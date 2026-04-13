@@ -86,6 +86,14 @@ export async function POST(request: Request) {
       validity_days,
       packing,
       remarks,
+      document_kind,
+      reference_number,
+      seller_visible_pl,
+      seller_visible_pi,
+      seller_visible_ci,
+      po_number,
+      deposit_percent,
+      quote_mode,
     } = body
 
     if (!customer_id || !trade_term || !products || products.length === 0) {
@@ -112,6 +120,20 @@ export async function POST(request: Request) {
         validity_days: validity_days || 30,
         packing,
         remarks,
+        document_kind: document_kind || 'PI',
+        reference_number: reference_number || null,
+        seller_visible_pl: seller_visible_pl !== false,
+        seller_visible_pi: seller_visible_pi !== false,
+        seller_visible_ci: seller_visible_ci !== false,
+        po_number: po_number?.trim() || null,
+        deposit_percent:
+          deposit_percent != null && deposit_percent !== ''
+            ? Number(deposit_percent)
+            : null,
+        quote_mode:
+          quote_mode === 'container_group' || quote_mode === 'product_list'
+            ? quote_mode
+            : 'product_list',
       })
       .select()
       .single()

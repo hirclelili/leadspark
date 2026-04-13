@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS customers (
   email TEXT,
   phone TEXT,
   country TEXT,
+  address TEXT,
   status TEXT DEFAULT 'new' CHECK (status IN ('new', 'quoted', 'negotiating', 'won', 'lost')),
   notes TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -70,6 +71,14 @@ CREATE TABLE IF NOT EXISTS quotations (
   packing TEXT,
   remarks TEXT,
   pdf_url TEXT,
+  document_kind TEXT DEFAULT 'PI',
+  reference_number TEXT,
+  seller_visible_pl BOOLEAN DEFAULT TRUE,
+  seller_visible_pi BOOLEAN DEFAULT TRUE,
+  seller_visible_ci BOOLEAN DEFAULT TRUE,
+  po_number TEXT,
+  deposit_percent NUMERIC,
+  quote_mode TEXT DEFAULT 'product_list',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -82,6 +91,25 @@ CREATE TABLE IF NOT EXISTS customer_remarks (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- CI / PL 单据草稿（统一编辑层）
+CREATE TABLE IF NOT EXISTS ci_pl_documents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  title TEXT,
+  currency TEXT NOT NULL DEFAULT 'USD',
+  customer_name TEXT,
+  customer_contact TEXT,
+  customer_address TEXT,
+  container_notes TEXT,
+  quote_mode TEXT DEFAULT 'product_list',
+  source TEXT,
+  quotation_id UUID REFERENCES quotations(id) ON DELETE SET NULL,
+  products JSONB NOT NULL DEFAULT '[]',
+  reference_number TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- =============================================================================
 -- RLS 策略
 -- =============================================================================
@@ -92,6 +120,7 @@ ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE quotations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE customer_remarks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ci_pl_documents ENABLE ROW LEVEL SECURITY;
 
 -- 创建策略
 DROP POLICY IF EXISTS "Users can manage own data" ON user_profiles;
@@ -99,12 +128,14 @@ DROP POLICY IF EXISTS "Users can manage own products" ON products;
 DROP POLICY IF EXISTS "Users can manage own customers" ON customers;
 DROP POLICY IF EXISTS "Users can manage own quotations" ON quotations;
 DROP POLICY IF EXISTS "Users can manage own remarks" ON customer_remarks;
+DROP POLICY IF EXISTS "Users can manage own ci_pl_documents" ON ci_pl_documents;
 
 CREATE POLICY "Users can manage own data" ON user_profiles FOR ALL USING (auth.uid() = user_id);
 CREATE POLICY "Users can manage own products" ON products FOR ALL USING (auth.uid() = user_id);
 CREATE POLICY "Users can manage own customers" ON customers FOR ALL USING (auth.uid() = user_id);
 CREATE POLICY "Users can manage own quotations" ON quotations FOR ALL USING (auth.uid() = user_id);
 CREATE POLICY "Users can manage own remarks" ON customer_remarks FOR ALL USING (auth.uid() = user_id);
+CREATE POLICY "Users can manage own ci_pl_documents" ON ci_pl_documents FOR ALL USING (auth.uid() = user_id);
 
 -- 完成提示
 SELECT 'Database tables and RLS policies created successfully!' as result;

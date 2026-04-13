@@ -22,7 +22,6 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import { toast } from 'sonner'
 
@@ -55,7 +54,7 @@ export default function CustomersPage() {
   const [page, setPage] = useState(1)
   const [limit] = useState(10)
   const [search, setSearch] = useState('')
-  const [status, setStatus] = useState('')
+  const [status, setStatus] = useState('all')
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null)
@@ -75,20 +74,30 @@ export default function CustomersPage() {
     fetchCustomers()
   }, [page, search, status])
 
-  const fetchCustomers = async () => {
+  /** 可选参数用于保存后立即拉取，避免仍用旧的 page/search/status（新建客户常因此被筛掉或不在当前页） */
+  const fetchCustomers = async (opts?: {
+    page?: number
+    search?: string
+    status?: string
+  }) => {
     setLoading(true)
+    const pageNum = opts?.page ?? page
+    const searchStr = opts?.search !== undefined ? opts.search : search
+    const statusStr = opts?.status !== undefined ? opts.status : status
     try {
       const params = new URLSearchParams({
-        page: String(page),
+        page: String(pageNum),
         limit: String(limit),
       })
-      if (search) params.set('search', search)
-      if (status) params.set('status', status)
+      if (searchStr) params.set('search', searchStr)
+      if (statusStr && statusStr !== 'all') params.set('status', statusStr)
 
       const res = await fetch(`/api/customers?${params}`)
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
 
-      if (data.error) {
+      if (!res.ok) {
+        toast.error(typeof data.error === 'string' ? data.error : '加载客户列表失败')
+      } else if (data.error) {
         toast.error(data.error)
       } else {
         setCustomers(data.customers || [])
@@ -96,6 +105,7 @@ export default function CustomersPage() {
       }
     } catch (error) {
       console.error('Error:', error)
+      toast.error('加载客户列表失败，请重试')
     } finally {
       setLoading(false)
     }
@@ -149,16 +159,24 @@ export default function CustomersPage() {
         body: JSON.stringify(formData),
       })
 
-      const data = await res.json()
-      if (data.error) {
-        toast.error(data.error)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data.error) {
+        toast.error(typeof data.error === 'string' ? data.error : '保存失败，请重试')
+        return
+      }
+      toast.success(editingCustomer ? '更新成功' : '添加成功')
+      setDialogOpen(false)
+      if (!editingCustomer) {
+        setPage(1)
+        setSearch('')
+        setStatus('all')
+        await fetchCustomers({ page: 1, search: '', status: 'all' })
       } else {
-        toast.success(editingCustomer ? '更新成功' : '添加成功')
-        setDialogOpen(false)
-        fetchCustomers()
+        await fetchCustomers()
       }
     } catch (error) {
       console.error('Error:', error)
+      toast.error('保存失败，请检查网络后重试')
     } finally {
       setSaving(false)
     }
@@ -201,12 +219,10 @@ export default function CustomersPage() {
           <h1 className="text-2xl font-bold">客户管理</h1>
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button onClick={() => handleOpenDialog()}>
-              <Plus className="mr-2 h-4 w-4" />
-              添加客户
-            </Button>
-          </DialogTrigger>
+          <Button onClick={() => handleOpenDialog()}>
+            <Plus className="mr-2 h-4 w-4" />
+            添加客户
+          </Button>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>
@@ -286,9 +302,9 @@ export default function CustomersPage() {
                 <label className="text-sm font-medium">状态</label>
                 <Select
                   value={formData.status}
-                  onValueChange={(value) =>
-                    setFormData({ ...formData, status: value })
-                  }
+                  onValueChange={(value) => {
+                    if (value != null) setFormData({ ...formData, status: value })
+                  }}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -312,7 +328,12 @@ export default function CustomersPage() {
                   placeholder="备注"
                 />
               </div>
-              <Button onClick={handleSave} disabled={saving} className="w-full">
+              <Button
+                type="button"
+                onClick={handleSave}
+                disabled={saving}
+                className="w-full"
+              >
                 {saving ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 ) : null}
@@ -337,12 +358,12 @@ export default function CustomersPage() {
             }}
           />
         </div>
-        <Select value={status} onValueChange={(v) => { setStatus(v); setPage(1) }}>
+        <Select value={status} onValueChange={(v) => { setStatus(v ?? 'all'); setPage(1) }}>
           <SelectTrigger className="w-[150px]">
             <SelectValue placeholder="全部状态" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">全部状态</SelectItem>
+            <SelectItem value="all">全部状态</SelectItem>
             {statusOptions.map((s) => (
               <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
             ))}

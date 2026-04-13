@@ -15,6 +15,16 @@ export async function POST(request: Request) {
 
     const now = Date.now()
 
+    // 1 CNY → 1 CNY (rates map does not include identity)
+    if (targetCurrency === 'CNY') {
+      return NextResponse.json({
+        rate: 1,
+        from: 'CNY',
+        to: 'CNY',
+        updatedAt: cacheUpdatedAt || new Date().toISOString(),
+      })
+    }
+
     // Return from cache if still fresh (all currencies cached together)
     if (allRatesCache && now - cacheTime < CACHE_DURATION) {
       const rate = allRatesCache[targetCurrency]
@@ -62,8 +72,16 @@ export async function POST(request: Request) {
     }
     // Hard-coded fallback rates
     const fallback: Record<string, number> = {
-      USD: 0.1380, EUR: 0.1270, GBP: 0.1090,
-      JPY: 20.80, AUD: 0.2140, CAD: 0.1900, AED: 0.5070, SGD: 0.1860,
+      USD: 0.1380,
+      EUR: 0.1270,
+      GBP: 0.1090,
+      JPY: 20.8,
+      AUD: 0.2140,
+      CAD: 0.1900,
+      AED: 0.5070,
+      SGD: 0.1860,
+      HKD: 1.09,
+      CNY: 1,
     }
     return NextResponse.json({
       rate: fallback[targetCurrency] ?? 0.138,
