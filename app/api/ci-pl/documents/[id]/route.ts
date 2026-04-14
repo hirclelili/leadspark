@@ -49,12 +49,20 @@ export async function PATCH(
       'customer_name',
       'customer_contact',
       'customer_address',
+      'customer_phone',
       'container_notes',
       'quote_mode',
       'source',
       'quotation_id',
       'products',
       'reference_number',
+      'port_of_loading',
+      'port_of_discharge',
+      'vessel_voyage',
+      'container_number',
+      'seal_number',
+      'trade_term',
+      'payment_terms',
     ] as const
 
     for (const k of keys) {

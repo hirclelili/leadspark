@@ -35,12 +35,20 @@ export async function POST(request: Request) {
       customer_name,
       customer_contact,
       customer_address,
+      customer_phone,
       container_notes,
       quote_mode,
       source,
       quotation_id,
       products,
       reference_number,
+      port_of_loading,
+      port_of_discharge,
+      vessel_voyage,
+      container_number,
+      seal_number,
+      trade_term,
+      payment_terms,
     } = body
 
     if (!products || !Array.isArray(products)) {
@@ -57,7 +65,15 @@ export async function POST(request: Request) {
         customer_name: customer_name?.trim() || null,
         customer_contact: customer_contact?.trim() || null,
         customer_address: customer_address?.trim() || null,
+        customer_phone: customer_phone?.trim() || null,
         container_notes: container_notes?.trim() || null,
+        port_of_loading: port_of_loading?.trim() || null,
+        port_of_discharge: port_of_discharge?.trim() || null,
+        vessel_voyage: vessel_voyage?.trim() || null,
+        container_number: container_number?.trim() || null,
+        seal_number: seal_number?.trim() || null,
+        trade_term: trade_term?.trim() || null,
+        payment_terms: payment_terms?.trim() || null,
         quote_mode:
           quote_mode === 'container_group' || quote_mode === 'product_list'
             ? quote_mode

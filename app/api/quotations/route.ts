@@ -94,6 +94,7 @@ export async function POST(request: Request) {
       po_number,
       deposit_percent,
       quote_mode,
+      quote_snapshot,
     } = body
 
     if (!customer_id || !trade_term || !products || products.length === 0) {
@@ -134,6 +135,7 @@ export async function POST(request: Request) {
           quote_mode === 'container_group' || quote_mode === 'product_list'
             ? quote_mode
             : 'product_list',
+        quote_snapshot: quote_snapshot ?? null,
       })
       .select()
       .single()

@@ -22,6 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { CURRENCY_OPTIONS, getCurrencySymbol } from '@/lib/currencies'
 
 const TRADE_TERMS = [
   { code: 'EXW', name: 'EXW', desc: '工厂交货' },
@@ -37,18 +38,7 @@ const TRADE_TERMS = [
   { code: 'DDP', name: 'DDP', desc: '完税后交货' },
 ]
 
-const currencies = [
-  { value: 'USD', label: 'USD - 美元' },
-  { value: 'EUR', label: 'EUR - 欧元' },
-  { value: 'GBP', label: 'GBP - 英镑' },
-  { value: 'JPY', label: 'JPY - 日元' },
-  { value: 'AUD', label: 'AUD - 澳元' },
-  { value: 'CAD', label: 'CAD - 加元' },
-  { value: 'AED', label: 'AED - 迪拉姆' },
-  { value: 'SGD', label: 'SGD - 新加坡元' },
-  { value: 'CNY', label: 'CNY - 人民币' },
-  { value: 'HKD', label: 'HKD - 港币' },
-]
+const currencies = CURRENCY_OPTIONS
 
 const OUTPUT_TRADE_TERM = 'EXW' as const
 
@@ -271,6 +261,58 @@ function calculateDiscount(lclFreight: number, fclFreight: number, lclQty: numbe
   return ((lclPrice - fclPrice) / lclPrice) * 100
 }
 
+function getOrderTotalForeign(multi: MultiProductQuoteResult | null, term: string): number {
+  return multi?.orderTotals.find((r) => r.term === term)?.priceForeign ?? 0
+}
+
+/** EXW 仅来自出厂价计算；其余术语来自含物流费的计算 */
+function multiForLineTerm(
+  term: string,
+  factory: MultiProductQuoteResult | null,
+  logistics: MultiProductQuoteResult | null
+): MultiProductQuoteResult | null {
+  if (term === 'EXW') return factory
+  return logistics
+}
+
+function repricePdfProductsForTerm(
+  pdfProducts: PDFProductRow[],
+  calcProducts: CalcProductRow[],
+  multi: MultiProductQuoteResult | null,
+  term: string
+): PDFProductRow[] {
+  if (!multi) return pdfProducts
+  const validCalc = calcProducts.filter(
+    (p) => parseFloat(p.costPrice) > 0 && parseFloat(p.quantity) > 0
+  )
+  let calcSlot = 0
+  return pdfProducts.map((row) => {
+    if (row.isContainerHeader) return row
+    const c = validCalc[calcSlot++]
+    if (!c) return row
+    const bp = multi.byProduct.find((b) => b.productId === c.id)
+    const tr = bp?.results.find((r) => r.term === term)
+    const unitPrice = tr?.priceForeign ?? 0
+    const qty = row.qty || parseFloat(c.quantity) || 1
+    return { ...row, unit_price_foreign: unitPrice, amount_foreign: unitPrice * qty }
+  })
+}
+
+function sumPdfProductRowsForeign(rows: PDFProductRow[]): number {
+  return rows.filter((p) => !p.isContainerHeader).reduce((s, p) => s + p.amount_foreign, 0)
+}
+
+function downloadPdfBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function QuotePage() {
@@ -297,6 +339,23 @@ export default function QuotePage() {
   const [lclData, setLclData] = useState({ quantity: '500', freight: '800' })
   const [fclData, setFclData] = useState({ quantity: '2000', freight: '1500' })
   const [showDetail, setShowDetail] = useState(false)
+  /** 物流报价区块展示的贸易术语（不含 EXW） */
+  const [visibleLogisticsTerms, setVisibleLogisticsTerms] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = {}
+    for (const { code } of TRADE_TERMS) {
+      if (code === 'EXW') continue
+      init[code] = ['FOB', 'CFR', 'CIF', 'DAP', 'DDP'].includes(code)
+    }
+    return init
+  })
+  /** PI 输出：出厂价 EXW / 物流术语价 / 两者 */
+  const [piOutputScope, setPiOutputScope] = useState<'exw' | 'logistics' | 'both'>('exw')
+  /** 物流价 PI 或双选时产品行所用贸易术语 */
+  const [piLogisticsTerm, setPiLogisticsTerm] = useState<string>('FOB')
+  /** 合并 PI 时产品明细行单价采用的术语（通常为 EXW 或 FOB） */
+  const [piMergedLineTerm, setPiMergedLineTerm] = useState<string>('EXW')
+  /** 同时选出厂价+物流时：合并一份 PDF 或两份 */
+  const [piDualPdfMode, setPiDualPdfMode] = useState<'merged' | 'two_pdfs'>('merged')
 
   // ── Quote dialog state
   const [quoteDialogOpen, setQuoteDialogOpen] = useState(false)
@@ -342,7 +401,31 @@ export default function QuotePage() {
   const [inquiryResult, setInquiryResult] = useState<Record<string, unknown> | null>(null)
 
   // ── Computed values
-  const multiResults = useMemo(() => {
+  /** 出厂价：不含国内/海运/目的港/保险，仅成本+利润 → 与 EXW 一致 */
+  const multiResultsFactory = useMemo(() => {
+    const valid = calcProducts
+      .map((p) => ({
+        id: p.id,
+        costPrice: parseFloat(p.costPrice) || 0,
+        quantity: parseFloat(p.quantity) || 0,
+      }))
+      .filter((p) => p.costPrice > 0 && p.quantity > 0)
+
+    if (valid.length === 0) return null
+
+    return calculateMultiProductQuote(
+      valid,
+      0,
+      0,
+      0,
+      0,
+      parseFloat(formData.profitRate) || 10,
+      exchangeRate
+    )
+  }, [calcProducts, formData.profitRate, exchangeRate])
+
+  /** 含物流费用的全量术语报价 */
+  const multiResultsLogistics = useMemo(() => {
     const valid = calcProducts
       .map((p) => ({
         id: p.id,
@@ -374,8 +457,8 @@ export default function QuotePage() {
   }, [showLCLFCL, lclData, fclData])
 
   const selectedTradeResult = useMemo(
-    () => multiResults?.orderTotals.find((r) => r.term === OUTPUT_TRADE_TERM) || null,
-    [multiResults]
+    () => multiResultsFactory?.orderTotals.find((r) => r.term === OUTPUT_TRADE_TERM) || null,
+    [multiResultsFactory]
   )
 
   // ── Effects
@@ -449,9 +532,9 @@ export default function QuotePage() {
     pdfProductListCalcLenRef.current = null
   }, [quoteLayoutMode])
 
-  // PDF 产品行：与计算器 EXW 对齐；产品列表模式为「前 N 行 + 手动行」；货柜模式保留标题行顺序并仅同步产品行价格
+  // PDF 产品行：与出厂价 EXW 对齐；产品列表模式为「前 N 行 + 手动行」；货柜模式保留标题行顺序并仅同步产品行价格
   useEffect(() => {
-    if (!multiResults) return
+    if (!multiResultsFactory) return
     const validCalc = calcProducts.filter((p) => parseFloat(p.costPrice) > 0 && parseFloat(p.quantity) > 0)
     const newCalcLen = validCalc.length
     const prevCalcLen = pdfProductListCalcLenRef.current
@@ -459,7 +542,7 @@ export default function QuotePage() {
     if (quoteLayoutMode === 'product_list') {
       setPdfProducts((prev) => {
         const head = validCalc.map((p, idx) => {
-          const bp = multiResults!.byProduct.find((b) => b.productId === p.id)
+          const bp = multiResultsFactory!.byProduct.find((b) => b.productId === p.id)
           const tr = bp?.results.find((r) => r.term === OUTPUT_TRADE_TERM)
           const unitPrice = tr?.priceForeign ?? 0
           const qty = parseFloat(p.quantity) || 1
@@ -493,7 +576,7 @@ export default function QuotePage() {
     setPdfProducts((prev) => {
       const oldProducts = prev.filter((r) => !r.isContainerHeader)
       const newProductRows = validCalc.map((p, idx) => {
-        const bp = multiResults!.byProduct.find((b) => b.productId === p.id)
+        const bp = multiResultsFactory!.byProduct.find((b) => b.productId === p.id)
         const tr = bp?.results.find((r) => r.term === OUTPUT_TRADE_TERM)
         const unitPrice = tr?.priceForeign ?? 0
         const qty = parseFloat(p.quantity) || 1
@@ -526,7 +609,7 @@ export default function QuotePage() {
       return merged.length > 0 ? merged : [emptyContainerHeaderRow(), emptyProductPdfRow(0)]
     })
     pdfProductListCalcLenRef.current = newCalcLen
-  }, [multiResults, calcProducts, quoteLayoutMode])
+  }, [multiResultsFactory, calcProducts, quoteLayoutMode])
 
   // ── Functions
   const fetchLibraryProducts = async () => {
@@ -604,22 +687,6 @@ export default function QuotePage() {
     return price.toFixed(2)
   }
 
-  const getCurrencySymbol = (currency: string) => {
-    const symbols: Record<string, string> = {
-      USD: '$',
-      EUR: '€',
-      GBP: '£',
-      JPY: '¥',
-      AUD: 'A$',
-      CAD: 'C$',
-      AED: 'AED ',
-      SGD: 'S$',
-      CNY: '¥',
-      HKD: 'HK$',
-    }
-    return symbols[currency] || '$'
-  }
-
   const openQuoteDialog = async () => {
     setQuoteStep(1)
     setSelectedCustomer(null)
@@ -666,10 +733,67 @@ export default function QuotePage() {
     } catch { setLastQuote(null) }
   }
 
+  function resolvePiPdfRows(): {
+    rowsPrimary: PDFProductRow[]
+    tradeTermForSave: string
+    quoteSummaryLines: { label: string; amountForeign: number }[] | undefined
+    twoPdfMode: boolean
+    rowsExw?: PDFProductRow[]
+    rowsLogistics?: PDFProductRow[]
+  } {
+    const fac = multiResultsFactory!
+    const log = multiResultsLogistics
+
+    if (piOutputScope === 'exw') {
+      const m = multiForLineTerm('EXW', fac, log)!
+      return {
+        rowsPrimary: repricePdfProductsForTerm(pdfProducts, calcProducts, m, 'EXW'),
+        tradeTermForSave: 'EXW',
+        quoteSummaryLines: undefined,
+        twoPdfMode: false,
+      }
+    }
+    if (piOutputScope === 'logistics') {
+      const m = multiForLineTerm(piLogisticsTerm, fac, log)!
+      return {
+        rowsPrimary: repricePdfProductsForTerm(pdfProducts, calcProducts, m, piLogisticsTerm),
+        tradeTermForSave: piLogisticsTerm,
+        quoteSummaryLines: undefined,
+        twoPdfMode: false,
+      }
+    }
+    if (piDualPdfMode === 'merged') {
+      const m = multiForLineTerm(piMergedLineTerm, fac, log)!
+      return {
+        rowsPrimary: repricePdfProductsForTerm(pdfProducts, calcProducts, m, piMergedLineTerm),
+        tradeTermForSave: piMergedLineTerm,
+        quoteSummaryLines: [
+          { label: 'EXW', amountForeign: getOrderTotalForeign(fac, 'EXW') },
+          { label: `${piLogisticsTerm}`, amountForeign: getOrderTotalForeign(log!, piLogisticsTerm) },
+        ],
+        twoPdfMode: false,
+      }
+    }
+    const rowsExw = repricePdfProductsForTerm(pdfProducts, calcProducts, fac, 'EXW')
+    const rowsLogistics = repricePdfProductsForTerm(pdfProducts, calcProducts, log!, piLogisticsTerm)
+    return {
+      rowsPrimary: rowsExw,
+      tradeTermForSave: 'EXW',
+      quoteSummaryLines: undefined,
+      twoPdfMode: true,
+      rowsExw,
+      rowsLogistics,
+    }
+  }
+
   const handleGeneratePDF = async () => {
     if (!selectedCustomer && !isNewCustomer) { toast.error('请选择或新建客户'); return }
     if (isNewCustomer && !newCustomerData.company_name.trim()) { toast.error('请填写客户公司名称'); return }
-    if (!selectedTradeResult) { toast.error('请先填写成本信息并计算报价'); return }
+    if (!selectedTradeResult || !multiResultsFactory) { toast.error('请先填写成本信息并计算报价'); return }
+    if ((piOutputScope === 'logistics' || piOutputScope === 'both') && !multiResultsLogistics) {
+      toast.error('物流报价未就绪，请检查成本与数量')
+      return
+    }
     const pdfDataRows = pdfProducts.filter((p) => !p.isContainerHeader)
     if (pdfDataRows.length === 0 || pdfDataRows.some((p) => !p.name.trim())) {
       toast.error('请填写所有产品名称')
@@ -697,12 +821,23 @@ export default function QuotePage() {
         customerAddress = data.address || ''
       }
 
-      const totalForeign = pdfDataRows.reduce((s, p) => s + p.amount_foreign, 0)
+      const fac = multiResultsFactory
+      const log = multiResultsLogistics
+      const {
+        rowsPrimary,
+        tradeTermForSave,
+        quoteSummaryLines,
+        twoPdfMode,
+        rowsExw,
+        rowsLogistics,
+      } = resolvePiPdfRows()
+
+      const totalForeign = sumPdfProductRowsForeign(rowsPrimary)
       const totalCNY = totalForeign / exchangeRate
 
       const validCalc = calcProducts.filter((p) => parseFloat(p.costPrice) > 0)
       let calcSlot = 0
-      const productsForDB = pdfProducts.map((p) => {
+      const productsForDB = rowsPrimary.map((p) => {
         if (p.isContainerHeader) {
           return {
             is_container_header: true,
@@ -730,12 +865,24 @@ export default function QuotePage() {
         }
       })
 
+      const quote_snapshot = {
+        pi_output_scope: piOutputScope,
+        pi_dual_pdf_mode: piOutputScope === 'both' ? piDualPdfMode : undefined,
+        pi_logistics_term: piOutputScope !== 'exw' ? piLogisticsTerm : undefined,
+        exw_total_foreign: getOrderTotalForeign(fac, 'EXW'),
+        logistics_total_foreign:
+          log && piOutputScope !== 'exw' ? getOrderTotalForeign(log, piLogisticsTerm) : undefined,
+        merged_line_term: piOutputScope === 'both' && piDualPdfMode === 'merged' ? piMergedLineTerm : undefined,
+        two_pdf_logistics_total_foreign:
+          twoPdfMode && rowsLogistics ? sumPdfProductRowsForeign(rowsLogistics) : undefined,
+      }
+
       const saveRes = await fetch('/api/quotations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer_id: customerId,
-          trade_term: OUTPUT_TRADE_TERM,
+          trade_term: tradeTermForSave,
           currency: formData.currency,
           exchange_rate: exchangeRate,
           products: productsForDB,
@@ -764,6 +911,7 @@ export default function QuotePage() {
               ? parseFloat(quoteDetails.depositPercent) || 0
               : null,
           quote_mode: quoteLayoutMode,
+          quote_snapshot,
         }),
       })
 
@@ -792,7 +940,7 @@ export default function QuotePage() {
       const depPct =
         docKind === 'PI' ? parseFloat(quoteDetails.depositPercent) || 0 : 0
 
-      const element = React.createElement(QuotationPDF, {
+      const basePdfProps = {
         companyName: userProfile?.company_name || 'Your Company',
         companyNameCn: userProfile?.company_name_cn,
         address: userProfile?.address,
@@ -811,20 +959,8 @@ export default function QuotePage() {
         documentNumberDisplay: displayNo,
         date: today,
         validityDays: quoteDetails.validityDays,
-        tradeTerm: OUTPUT_TRADE_TERM,
         currency: formData.currency,
-        products: pdfProducts.map((p) => ({
-          name: p.name,
-          model: p.model || undefined,
-          specs: p.specs || undefined,
-          qty: p.qty,
-          unit: p.unit,
-          unit_price_foreign: p.unit_price_foreign,
-          amount_foreign: p.amount_foreign,
-          is_container_header: p.isContainerHeader === true,
-        })),
         quoteMode: quoteLayoutMode,
-        totalAmount: totalForeign,
         paymentTerms: quoteDetails.paymentTerms,
         deliveryTime: quoteDetails.deliveryTime,
         packing: quoteDetails.packing || undefined,
@@ -833,17 +969,54 @@ export default function QuotePage() {
         showSellerHeader,
         poNumber: quoteDetails.poNumber.trim() || undefined,
         depositPercent: depPct,
-      })
+      }
 
-      const blob = await pdf(element as Parameters<typeof pdf>[0]).toBlob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${savedQuote.quotation_number}.pdf`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
+      const mapRows = (rows: PDFProductRow[]) =>
+        rows.map((p) => ({
+          name: p.name,
+          model: p.model || undefined,
+          specs: p.specs || undefined,
+          qty: p.qty,
+          unit: p.unit,
+          unit_price_foreign: p.unit_price_foreign,
+          amount_foreign: p.amount_foreign,
+          is_container_header: p.isContainerHeader === true,
+        }))
+
+      if (twoPdfMode && rowsExw && rowsLogistics) {
+        const totalA = sumPdfProductRowsForeign(rowsExw)
+        const totalB = sumPdfProductRowsForeign(rowsLogistics)
+        const elA = React.createElement(QuotationPDF, {
+          ...basePdfProps,
+          tradeTerm: 'EXW',
+          products: mapRows(rowsExw),
+          totalAmount: totalA,
+          quoteSummaryLines: undefined,
+        })
+        const elB = React.createElement(QuotationPDF, {
+          ...basePdfProps,
+          tradeTerm: piLogisticsTerm,
+          products: mapRows(rowsLogistics),
+          totalAmount: totalB,
+          quoteSummaryLines: undefined,
+        })
+        const blobA = await pdf(elA as Parameters<typeof pdf>[0]).toBlob()
+        const blobB = await pdf(elB as Parameters<typeof pdf>[0]).toBlob()
+        downloadPdfBlob(blobA, `${savedQuote.quotation_number}-EXW.pdf`)
+        setTimeout(() => {
+          downloadPdfBlob(blobB, `${savedQuote.quotation_number}-${piLogisticsTerm}.pdf`)
+        }, 400)
+      } else {
+        const element = React.createElement(QuotationPDF, {
+          ...basePdfProps,
+          tradeTerm: tradeTermForSave,
+          products: mapRows(rowsPrimary),
+          totalAmount: totalForeign,
+          quoteSummaryLines,
+        })
+        const blob = await pdf(element as Parameters<typeof pdf>[0]).toBlob()
+        downloadPdfBlob(blob, `${savedQuote.quotation_number}.pdf`)
+      }
 
       toast.success(`报价单 ${savedQuote.quotation_number} 已生成并保存`)
       setQuoteDialogOpen(false)
@@ -856,7 +1029,11 @@ export default function QuotePage() {
 
   const handlePreviewPDF = async () => {
     if (!selectedCustomer && !isNewCustomer) { toast.error('请先选择客户'); return }
-    if (!selectedTradeResult) { toast.error('请先填写成本信息并计算报价'); return }
+    if (!selectedTradeResult || !multiResultsFactory) { toast.error('请先填写成本信息并计算报价'); return }
+    if ((piOutputScope === 'logistics' || piOutputScope === 'both') && !multiResultsLogistics) {
+      toast.error('物流报价未就绪')
+      return
+    }
     const pdfDataRowsPv = pdfProducts.filter((p) => !p.isContainerHeader)
     if (pdfDataRowsPv.length === 0 || pdfDataRowsPv.some((p) => !p.name.trim())) {
       toast.error('请填写所有产品名称')
@@ -875,12 +1052,30 @@ export default function QuotePage() {
       const customerName = selectedCustomer?.company_name || newCustomerData.company_name
       const customerContact = selectedCustomer?.contact_name || newCustomerData.contact_name || ''
       const customerAddress = selectedCustomer?.address || newCustomerData.address || ''
-      const totalForeign = pdfProducts
-        .filter((p) => !p.isContainerHeader)
-        .reduce((s, p) => s + p.amount_foreign, 0)
       const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
 
-      const element = React.createElement(QuotationPDF, {
+      const {
+        rowsPrimary,
+        tradeTermForSave,
+        quoteSummaryLines,
+        twoPdfMode,
+        rowsExw,
+        rowsLogistics,
+      } = resolvePiPdfRows()
+
+      const mapRows = (rows: PDFProductRow[]) =>
+        rows.map((p) => ({
+          name: p.name,
+          model: p.model || undefined,
+          specs: p.specs || undefined,
+          qty: p.qty,
+          unit: p.unit,
+          unit_price_foreign: p.unit_price_foreign,
+          amount_foreign: p.amount_foreign,
+          is_container_header: p.isContainerHeader === true,
+        }))
+
+      const basePreviewProps = {
         companyName: userProfile?.company_name || 'Your Company',
         companyNameCn: userProfile?.company_name_cn,
         address: userProfile?.address,
@@ -899,20 +1094,8 @@ export default function QuotePage() {
         documentNumberDisplay: quoteDetails.referenceNumber.trim() || 'PREVIEW',
         date: today,
         validityDays: quoteDetails.validityDays,
-        tradeTerm: OUTPUT_TRADE_TERM,
         currency: formData.currency,
-        products: pdfProducts.map((p) => ({
-          name: p.name,
-          model: p.model || undefined,
-          specs: p.specs || undefined,
-          qty: p.qty,
-          unit: p.unit,
-          unit_price_foreign: p.unit_price_foreign,
-          amount_foreign: p.amount_foreign,
-          is_container_header: p.isContainerHeader === true,
-        })),
         quoteMode: quoteLayoutMode,
-        totalAmount: totalForeign,
         paymentTerms: quoteDetails.paymentTerms,
         deliveryTime: quoteDetails.deliveryTime,
         packing: quoteDetails.packing || undefined,
@@ -930,12 +1113,51 @@ export default function QuotePage() {
           quoteDetails.documentKind === 'PI'
             ? parseFloat(quoteDetails.depositPercent) || 0
             : 0,
-      })
+      }
 
-      const blob = await pdf(element as Parameters<typeof pdf>[0]).toBlob()
-      const url = URL.createObjectURL(blob)
-      window.open(url, '_blank')
-      setTimeout(() => URL.revokeObjectURL(url), 5000)
+      if (twoPdfMode && rowsExw && rowsLogistics) {
+        const totalA = sumPdfProductRowsForeign(rowsExw)
+        const totalB = sumPdfProductRowsForeign(rowsLogistics)
+        const elA = React.createElement(QuotationPDF, {
+          ...basePreviewProps,
+          tradeTerm: 'EXW',
+          products: mapRows(rowsExw),
+          totalAmount: totalA,
+          quoteSummaryLines: undefined,
+        })
+        const elB = React.createElement(QuotationPDF, {
+          ...basePreviewProps,
+          tradeTerm: piLogisticsTerm,
+          products: mapRows(rowsLogistics),
+          totalAmount: totalB,
+          quoteSummaryLines: undefined,
+        })
+        const blobA = await pdf(elA as Parameters<typeof pdf>[0]).toBlob()
+        const blobB = await pdf(elB as Parameters<typeof pdf>[0]).toBlob()
+        const urlA = URL.createObjectURL(blobA)
+        window.open(urlA, '_blank')
+        setTimeout(() => {
+          const urlB = URL.createObjectURL(blobB)
+          window.open(urlB, '_blank')
+          setTimeout(() => {
+            URL.revokeObjectURL(urlA)
+            URL.revokeObjectURL(urlB)
+          }, 8000)
+        }, 300)
+      } else {
+        const totalForeign = sumPdfProductRowsForeign(rowsPrimary)
+        const element = React.createElement(QuotationPDF, {
+          ...basePreviewProps,
+          tradeTerm: tradeTermForSave,
+          products: mapRows(rowsPrimary),
+          totalAmount: totalForeign,
+          quoteSummaryLines,
+        })
+        const blob = await pdf(element as Parameters<typeof pdf>[0]).toBlob()
+        const url = URL.createObjectURL(blob)
+        window.open(url, '_blank')
+        setTimeout(() => URL.revokeObjectURL(url), 5000)
+      }
     } catch (error: unknown) {
       toast.error(error instanceof Error ? error.message : '预览失败，请重试')
     } finally {
@@ -1008,7 +1230,9 @@ export default function QuotePage() {
           <div>
             <span className="text-sm text-blue-600">汇率</span>
             <span className="text-lg font-bold ml-2">
-              {formData.currency}/CNY = {exchangeRate.toFixed(4)}
+              {formData.currency === 'CNY'
+                ? 'CNY 为本位币（无需换算）'
+                : `${formData.currency}/CNY = ${exchangeRate.toFixed(4)}`}
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -1121,49 +1345,59 @@ export default function QuotePage() {
               </button>
             </div>
 
-            {/* Shared costs */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">国内费用 (CNY)</label>
-                <Input
-                  type="number"
-                  value={formData.domesticCost}
-                  onChange={(e) => setFormData({ ...formData, domesticCost: e.target.value })}
-                  placeholder="拖车费+港杂费"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">海运费 (CNY)</label>
-                <Input
-                  type="number"
-                  value={formData.freight}
-                  onChange={(e) => setFormData({ ...formData, freight: e.target.value })}
-                  placeholder="海运费总额"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">目的港费用 (CNY)</label>
-                <Input
-                  type="number"
-                  value={formData.destinationCost}
-                  onChange={(e) => setFormData({ ...formData, destinationCost: e.target.value })}
-                  placeholder="DAP/DPU/DDP用"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">保险费率 (%)</label>
-                <Input
-                  type="number"
-                  step="0.1"
-                  value={formData.insuranceRate}
-                  onChange={(e) => setFormData({ ...formData, insuranceRate: e.target.value })}
-                  placeholder="CIF/CIP用"
-                />
-              </div>
-            </div>
+            {multiResultsFactory &&
+              calcProducts.filter((p) => parseFloat(p.costPrice) > 0).length >= 2 && (
+                <div className="border rounded-lg p-3 bg-gray-50/50">
+                  <button
+                    type="button"
+                    onClick={() => setShowDetail((v) => !v)}
+                    className="flex items-center gap-2 text-sm font-medium text-gray-700 w-full"
+                  >
+                    {showDetail ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    产品明细（{OUTPUT_TRADE_TERM}）
+                  </button>
+                  {showDetail && (
+                    <div className="mt-3 space-y-2">
+                      {multiResultsFactory.byProduct.map(({ productId, results }) => {
+                        const calc = calcProducts.find((p) => p.id === productId)
+                        if (!calc) return null
+                        const r = results.find((r) => r.term === OUTPUT_TRADE_TERM)
+                        if (!r) return null
+                        const qty = parseFloat(calc.quantity) || 1
+                        return (
+                          <div
+                            key={productId}
+                            className="flex items-center justify-between text-xs text-gray-700 bg-white rounded px-3 py-2 border"
+                          >
+                            <span className="font-medium">
+                              {calc.name || '产品'}
+                              {calc.model ? ` (${calc.model})` : ''}
+                            </span>
+                            <span className="text-gray-500">
+                              {sym}
+                              {formatPrice(r.priceForeign)}/{calc.unit} × {qty} ={' '}
+                              <span className="font-semibold text-blue-700">
+                                {sym}
+                                {(r.priceForeign * qty).toFixed(2)}
+                              </span>
+                            </span>
+                          </div>
+                        )
+                      })}
+                      <div className="flex justify-between text-xs font-bold border-t pt-2 px-3">
+                        <span>合计</span>
+                        <span className="text-blue-700">
+                          {sym}
+                          {(
+                            multiResultsFactory.orderTotals.find((r) => r.term === OUTPUT_TRADE_TERM)
+                              ?.priceForeign || 0
+                          ).toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
@@ -1190,8 +1424,147 @@ export default function QuotePage() {
               </div>
             </div>
 
-            {/* LCL/FCL */}
-            <div className="flex items-center gap-2">
+            <div className="space-y-2 pt-2 border-t">
+              <h3 className="text-sm font-semibold text-gray-800">出厂价（EXW）</h3>
+              {!multiResultsFactory ? (
+                <p className="text-xs text-gray-400">请输入有效成本与数量</p>
+              ) : (
+                <div className="border rounded-lg overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-gray-50">
+                        <th className="text-left p-2 font-medium text-gray-500">术语</th>
+                        <th className="text-right p-2 font-medium text-gray-500">{formData.currency} 合计</th>
+                        <th className="text-right p-2 font-medium text-gray-500">CNY 合计</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {multiResultsFactory.orderTotals
+                        .filter((r) => r.term === OUTPUT_TRADE_TERM)
+                        .map((r) => (
+                          <tr key={r.term} className="border-b bg-blue-50/80">
+                            <td className="p-2">
+                              <span className="font-mono font-medium">{r.term}</span>
+                              <span className="text-xs text-gray-400 ml-2">
+                                {TRADE_TERMS.find((t) => t.code === r.term)?.desc}
+                              </span>
+                            </td>
+                            <td className="p-2 text-right font-medium">
+                              {sym}
+                              {formatPrice(r.priceForeign)}
+                            </td>
+                            <td className="p-2 text-right text-gray-500">¥{r.priceCNY.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-3 pt-2 border-t">
+              <h3 className="text-sm font-semibold text-gray-800">物流费用</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">国内费用 (CNY)</label>
+                  <Input
+                    type="number"
+                    value={formData.domesticCost}
+                    onChange={(e) => setFormData({ ...formData, domesticCost: e.target.value })}
+                    placeholder="拖车费+港杂费"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">海运费 (CNY)</label>
+                  <Input
+                    type="number"
+                    value={formData.freight}
+                    onChange={(e) => setFormData({ ...formData, freight: e.target.value })}
+                    placeholder="海运费总额"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">目的港费用 (CNY)</label>
+                  <Input
+                    type="number"
+                    value={formData.destinationCost}
+                    onChange={(e) => setFormData({ ...formData, destinationCost: e.target.value })}
+                    placeholder="DAP/DPU/DDP用"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">保险费率 (%)</label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    value={formData.insuranceRate}
+                    onChange={(e) => setFormData({ ...formData, insuranceRate: e.target.value })}
+                    placeholder="CIF/CIP用"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2 pt-2 border-t">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-gray-800">报价结果（物流术语）</h3>
+                <span className="text-xs text-gray-400">勾选要展示的术语</span>
+              </div>
+              <div className="flex flex-wrap gap-2 text-xs">
+                {TRADE_TERMS.filter((t) => t.code !== 'EXW').map((t) => (
+                  <label key={t.code} className="inline-flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="w-3.5 h-3.5 rounded border-gray-300"
+                      checked={visibleLogisticsTerms[t.code] ?? false}
+                      onChange={(e) =>
+                        setVisibleLogisticsTerms((prev) => ({ ...prev, [t.code]: e.target.checked }))
+                      }
+                    />
+                    <span>{t.code}</span>
+                  </label>
+                ))}
+              </div>
+              {!multiResultsLogistics ? (
+                <p className="text-xs text-gray-400">请输入有效成本与数量</p>
+              ) : (
+                <div className="border rounded-lg overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-gray-50">
+                        <th className="text-left p-2 font-medium text-gray-500">术语</th>
+                        <th className="text-right p-2 font-medium text-gray-500">{formData.currency} 合计</th>
+                        <th className="text-right p-2 font-medium text-gray-500">CNY 合计</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {multiResultsLogistics.orderTotals
+                        .filter((r) => r.term !== 'EXW' && visibleLogisticsTerms[r.term])
+                        .map((r) => (
+                          <tr key={r.term} className="border-b">
+                            <td className="p-2">
+                              <span className="font-mono font-medium">{r.term}</span>
+                              <span className="text-xs text-gray-400 ml-2">
+                                {TRADE_TERMS.find((t) => t.code === r.term)?.desc}
+                              </span>
+                            </td>
+                            <td className="p-2 text-right font-medium">
+                              {sym}
+                              {formatPrice(r.priceForeign)}
+                            </td>
+                            <td className="p-2 text-right text-gray-500">¥{r.priceCNY.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* LCL/FCL — 参考对比，不计入主表公式 */}
+            <div className="flex items-center gap-2 pt-2 border-t">
               <input
                 type="checkbox"
                 id="showLCLFCL"
@@ -1236,11 +1609,11 @@ export default function QuotePage() {
           </CardContent>
         </Card>
 
-        {/* ── Right: Results */}
+        {/* ── Right: PI + PDF */}
         <div className="space-y-4">
-          <h2 className="font-bold">报价结果</h2>
+          <h2 className="font-bold">PI 与 PDF</h2>
 
-          {!multiResults ? (
+          {!multiResultsFactory ? (
             <Card>
               <CardContent className="py-12 text-center text-gray-500">
                 请输入产品成本和数量
@@ -1248,87 +1621,112 @@ export default function QuotePage() {
             </Card>
           ) : (
             <>
-              {/* Order totals table */}
               <Card>
-                <CardContent className="p-0">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b bg-gray-50">
-                        <th className="text-left p-3 font-medium text-gray-500">贸易术语（报价输出）</th>
-                        <th className="text-right p-3 font-medium text-gray-500">{formData.currency} 合计</th>
-                        <th className="text-right p-3 font-medium text-gray-500">CNY 合计</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {multiResults.orderTotals
-                        .filter((r) => r.term === OUTPUT_TRADE_TERM)
-                        .map((r) => (
-                          <tr key={r.term} className="border-b bg-blue-50 border-l-2 border-l-blue-500">
-                            <td className="p-3">
-                              <span className="font-mono font-medium">{r.term}</span>
-                              <span className="text-xs text-gray-400 ml-2">
-                                {TRADE_TERMS.find((t) => t.code === r.term)?.desc}
-                              </span>
-                            </td>
-                            <td className="p-3 text-right font-medium">
-                              {sym}{formatPrice(r.priceForeign)}
-                            </td>
-                            <td className="p-3 text-right text-gray-500">
-                              ¥{r.priceCNY.toFixed(2)}
-                            </td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
-                  <p className="text-xs text-gray-400 p-3">报价单与 PDF 均按 {OUTPUT_TRADE_TERM} 生成（计算器仍可按各术语核算成本）</p>
-                </CardContent>
-              </Card>
-
-              {/* Product breakdown (≥2 products) */}
-              {calcProducts.filter((p) => parseFloat(p.costPrice) > 0).length >= 2 && (
-                <Card>
-                  <CardContent className="p-3">
-                    <button
-                      type="button"
-                      onClick={() => setShowDetail((v) => !v)}
-                      className="flex items-center gap-2 text-sm font-medium text-gray-700 w-full"
-                    >
-                      {showDetail ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                      产品明细（{OUTPUT_TRADE_TERM}）
-                    </button>
-                    {showDetail && (
-                      <div className="mt-3 space-y-2">
-                        {multiResults.byProduct.map(({ productId, results }) => {
-                          const calc = calcProducts.find((p) => p.id === productId)
-                          if (!calc) return null
-                          const r = results.find((r) => r.term === OUTPUT_TRADE_TERM)
-                          if (!r) return null
-                          const qty = parseFloat(calc.quantity) || 1
-                          return (
-                            <div key={productId} className="flex items-center justify-between text-xs text-gray-700 bg-gray-50 rounded px-3 py-2">
-                              <span className="font-medium">{calc.name || '产品'}{calc.model ? ` (${calc.model})` : ''}</span>
-                              <span className="text-gray-500">
-                                {sym}{formatPrice(r.priceForeign)}/{calc.unit} × {qty} = <span className="font-semibold text-blue-700">{sym}{(r.priceForeign * qty).toFixed(2)}</span>
-                              </span>
-                            </div>
-                          )
-                        })}
-                        <div className="flex justify-between text-xs font-bold border-t pt-2 px-3">
-                          <span>合计</span>
-                          <span className="text-blue-700">
-                            {sym}{(multiResults.orderTotals.find((r) => r.term === OUTPUT_TRADE_TERM)?.priceForeign || 0).toFixed(2)}
-                          </span>
+                <CardContent className="p-4 space-y-3">
+                  <h3 className="font-semibold text-sm">PI 输出</h3>
+                  <div className="flex flex-col gap-2 text-sm">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="piScope"
+                        className="w-4 h-4"
+                        checked={piOutputScope === 'exw'}
+                        onChange={() => setPiOutputScope('exw')}
+                      />
+                      仅出厂价（EXW）
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="piScope"
+                        className="w-4 h-4"
+                        checked={piOutputScope === 'logistics'}
+                        onChange={() => setPiOutputScope('logistics')}
+                      />
+                      仅物流贸易术语价（如 FOB / DAP）
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="piScope"
+                        className="w-4 h-4"
+                        checked={piOutputScope === 'both'}
+                        onChange={() => setPiOutputScope('both')}
+                      />
+                      出厂价 + 物流术语（双板块）
+                    </label>
+                  </div>
+                  {(piOutputScope === 'logistics' || piOutputScope === 'both') && (
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium text-gray-600">物流价主术语（PDF 行价 / 摘要）</label>
+                      <Select value={piLogisticsTerm} onValueChange={(v) => v && setPiLogisticsTerm(v)}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {TRADE_TERMS.filter((t) => t.code !== 'EXW').map((t) => (
+                            <SelectItem key={t.code} value={t.code}>{t.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                  {piOutputScope === 'both' && (
+                    <>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium text-gray-600">双选时输出</label>
+                        <div className="flex flex-col gap-2 text-sm">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="piDual"
+                              className="w-4 h-4"
+                              checked={piDualPdfMode === 'merged'}
+                              onChange={() => setPiDualPdfMode('merged')}
+                            />
+                            合并为一份 PDF（含双术语摘要）
+                          </label>
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="piDual"
+                              className="w-4 h-4"
+                              checked={piDualPdfMode === 'two_pdfs'}
+                              onChange={() => setPiDualPdfMode('two_pdfs')}
+                            />
+                            分两份 PDF 下载
+                          </label>
                         </div>
                       </div>
-                    )}
-                  </CardContent>
-                </Card>
-              )}
+                      {piDualPdfMode === 'merged' && (
+                        <div className="space-y-2">
+                          <label className="text-xs font-medium text-gray-600">合并 PDF 产品行单价术语</label>
+                          <Select value={piMergedLineTerm} onValueChange={(v) => v && setPiMergedLineTerm(v)}>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {TRADE_TERMS.map((t) => (
+                                <SelectItem key={t.code} value={t.code}>{t.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </CardContent>
+              </Card>
 
               <Card>
                 <CardContent className="p-4 space-y-3">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <h3 className="font-semibold text-sm">产品报价（PDF 明细 · {OUTPUT_TRADE_TERM}）</h3>
+                    <div>
+                      <h3 className="font-semibold text-sm">产品报价（PDF 明细行）</h3>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        编辑区与出厂价 EXW 同步；保存/预览时按上方 PI 输出选项重算单价与合计。
+                      </p>
+                    </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="inline-flex rounded-md border border-gray-200 bg-white p-0.5 text-xs">
                         <button

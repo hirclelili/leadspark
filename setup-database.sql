@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS quotations (
   po_number TEXT,
   deposit_percent NUMERIC,
   quote_mode TEXT DEFAULT 'product_list',
+  quote_snapshot JSONB,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

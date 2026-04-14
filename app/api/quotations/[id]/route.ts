@@ -14,7 +14,7 @@ export async function GET(
 
     const { data, error } = await supabase
       .from('quotations')
-      .select('*, customers(company_name, contact_name, email, country)')
+      .select('*, customers(company_name, contact_name, email, country, address, phone)')
       .eq('id', id)
       .eq('user_id', user.id)
       .single()

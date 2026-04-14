@@ -286,6 +286,8 @@ interface QuotationPDFProps {
   poNumber?: string
   /** Deposit % for PI (0–100). */
   depositPercent?: number
+  /** Optional subtotals shown above the main Total (e.g. EXW vs logistics term). */
+  quoteSummaryLines?: { label: string; amountForeign: number }[]
 }
 
 export function QuotationPDF({
@@ -321,6 +323,7 @@ export function QuotationPDF({
   documentNumberDisplay,
   poNumber,
   depositPercent = 0,
+  quoteSummaryLines,
 }: QuotationPDFProps) {
   const documentKind: DocumentKind =
     documentKindProp ?? (type === 'PI' ? 'PI' : 'QUOTATION')
@@ -618,6 +621,16 @@ export function QuotationPDF({
         {/* Totals */}
         {showPricing && (
           <View style={styles.totalsSection}>
+            {quoteSummaryLines && quoteSummaryLines.length > 0 ? (
+              <>
+                {quoteSummaryLines.map((line, i) => (
+                  <View key={i} style={styles.totalRow}>
+                    <Text style={styles.totalLabel}>{line.label}:</Text>
+                    <Text style={styles.totalValue}>{formatPrice(line.amountForeign)}</Text>
+                  </View>
+                ))}
+              </>
+            ) : null}
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Total:</Text>
               <Text style={styles.totalValue}>{formatPrice(totalAmount)}</Text>
