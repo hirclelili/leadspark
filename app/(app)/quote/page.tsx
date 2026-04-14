@@ -688,13 +688,12 @@ export default function QuotePage() {
   }
 
   const openQuoteDialog = async () => {
-    setQuoteStep(1)
-    setSelectedCustomer(null)
-    setIsNewCustomer(false)
+    const hasCustomer =
+      selectedCustomer != null ||
+      (isNewCustomer && newCustomerData.company_name.trim() !== '')
+    setQuoteStep(hasCustomer ? 2 : 1)
     setCustomerQuery('')
     setCustomerResults([])
-    setLastQuote(null)
-    setNewCustomerData({ company_name: '', contact_name: '', email: '', phone: '', country: '', address: '' })
 
     try {
       const res = await fetch('/api/user-profile')
@@ -1211,46 +1210,145 @@ export default function QuotePage() {
 
   const sym = getCurrencySymbol(formData.currency)
 
+  const stepTitle = (n: number, title: string) => (
+    <h2 className="font-bold text-base flex items-center gap-2 text-gray-900">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white text-sm font-bold">
+        {n}
+      </span>
+      {title}
+    </h2>
+  )
+
   return (
-    <div className="p-8 pt-16 md:pt-8 space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Calculator className="w-6 h-6" />
-          <h1 className="text-2xl font-bold">报价计算器</h1>
+    <div className="p-8 pt-16 md:pt-8 max-w-4xl mx-auto space-y-6">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3 min-w-0">
+          <Calculator className="w-6 h-6 shrink-0" />
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold">报价</h1>
+            <p className="text-xs text-gray-500 mt-0.5 hidden sm:block">
+              客户 → 产品与算价 → 出厂价 → 物流价 → 输出单证与 PDF
+            </p>
+          </div>
         </div>
-        <Button variant="outline" size="sm" onClick={() => setAiPanelOpen(true)}>
+        <Button variant="outline" size="sm" onClick={() => setAiPanelOpen(true)} className="shrink-0">
           <Sparkles className="mr-1.5 h-4 w-4 text-blue-500" />
           AI 解析询盘
         </Button>
       </div>
 
-      {/* Exchange Rate */}
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <span className="text-sm text-blue-600">汇率</span>
-            <span className="text-lg font-bold ml-2">
-              {formData.currency === 'CNY'
-                ? 'CNY 为本位币（无需换算）'
-                : `${formData.currency}/CNY = ${exchangeRate.toFixed(4)}`}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-blue-500">更新于 {formatTime(rateUpdatedAt)}</span>
-            <Button variant="ghost" size="sm" onClick={fetchExchangeRate} disabled={rateLoading}>
-              <RefreshCw className={`w-4 h-4 ${rateLoading ? 'animate-spin' : ''}`} />
-            </Button>
-          </div>
-        </div>
-      </div>
+      {/* ① 客户（可选） */}
+      <Card>
+        <CardContent className="p-5 space-y-4">
+          {stepTitle(1, '客户（可选）')}
+          <p className="text-xs text-gray-500">
+            可先算价再选客户。生成 PDF 并保存时需选择已有客户或新建客户。
+          </p>
+          {!isNewCustomer ? (
+            <>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <Input
+                  className="pl-9"
+                  placeholder="搜索客户公司名称…"
+                  value={customerQuery}
+                  onChange={(e) => {
+                    setCustomerQuery(e.target.value)
+                    setSelectedCustomer(null)
+                  }}
+                />
+              </div>
+              {customerLoading && (
+                <div className="flex justify-center py-2">
+                  <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+                </div>
+              )}
+              {customerResults.length > 0 && (
+                <div className="border rounded-lg divide-y max-h-40 overflow-y-auto">
+                  {customerResults.map((c) => (
+                    <div
+                      key={c.id}
+                      onClick={() => handleSelectCustomer(c)}
+                      className={`p-3 cursor-pointer hover:bg-gray-50 text-sm ${selectedCustomer?.id === c.id ? 'bg-blue-50' : ''}`}
+                    >
+                      <div className="font-medium">{c.company_name}</div>
+                      {c.contact_name && <div className="text-xs text-gray-500">{c.contact_name}</div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {selectedCustomer && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm">
+                  <div className="font-medium text-blue-800">已选择：{selectedCustomer.company_name}</div>
+                  {lastQuote ? (
+                    <div className="text-xs text-blue-600 mt-1">
+                      上次报价：{new Date(lastQuote.date).toLocaleDateString('zh-CN')}，{lastQuote.trade_term}，{lastQuote.currency} {lastQuote.total_amount_foreign.toFixed(2)}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-blue-500 mt-1">暂无历史报价</div>
+                  )}
+                </div>
+              )}
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <div className="flex-1 border-t" />
+                <span>或</span>
+                <div className="flex-1 border-t" />
+              </div>
+              <Button type="button" variant="outline" className="w-full" onClick={() => setIsNewCustomer(true)}>
+                + 新建客户
+              </Button>
+            </>
+          ) : (
+            <div className="space-y-3">
+              <Button type="button" variant="ghost" size="sm" className="text-gray-500 -mb-1" onClick={() => setIsNewCustomer(false)}>
+                <ArrowLeft className="w-4 h-4 mr-1" />
+                返回搜索
+              </Button>
+              <div>
+                <label className="text-sm font-medium">公司名称 *</label>
+                <Input
+                  className="mt-1"
+                  value={newCustomerData.company_name}
+                  onChange={(e) => setNewCustomerData({ ...newCustomerData, company_name: e.target.value })}
+                  placeholder="客户公司名称"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm font-medium">联系人</label>
+                  <Input className="mt-1" value={newCustomerData.contact_name} onChange={(e) => setNewCustomerData({ ...newCustomerData, contact_name: e.target.value })} placeholder="联系人" />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">国家</label>
+                  <Input className="mt-1" value={newCustomerData.country} onChange={(e) => setNewCustomerData({ ...newCustomerData, country: e.target.value })} placeholder="如 USA" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm font-medium">邮箱</label>
+                  <Input className="mt-1" type="email" value={newCustomerData.email} onChange={(e) => setNewCustomerData({ ...newCustomerData, email: e.target.value })} />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">电话</label>
+                  <Input className="mt-1" value={newCustomerData.phone} onChange={(e) => setNewCustomerData({ ...newCustomerData, phone: e.target.value })} />
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-medium">地址</label>
+                <Input className="mt-1" value={newCustomerData.address} onChange={(e) => setNewCustomerData({ ...newCustomerData, address: e.target.value })} placeholder="公司地址（可选）" />
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* ── Left: Input Form */}
-        <Card>
-          <CardContent className="p-6 space-y-5">
-            <h2 className="font-bold">输入参数</h2>
+      {/* ② 产品与算价 */}
+      <Card>
+        <CardContent className="p-6 space-y-5">
+          {stepTitle(2, '产品与算价')}
+          <p className="text-xs text-gray-500">填写产品成本、数量、利润率与目标货币；下方为人民币→目标货币的汇率。</p>
 
-            {/* Product Table */}
+          {/* Product Table */}
             <div className="space-y-2">
               <label className="text-sm font-medium">产品列表</label>
               <div className="border rounded-lg overflow-hidden">
@@ -1345,6 +1443,50 @@ export default function QuotePage() {
               </button>
             </div>
 
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">期望利润率 (%) *</label>
+                <Input
+                  type="number"
+                  value={formData.profitRate}
+                  onChange={(e) => setFormData({ ...formData, profitRate: e.target.value })}
+                  placeholder="10"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">目标货币</label>
+                <Select value={formData.currency} onValueChange={(v) => v && handleCurrencyChange(v)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {currencies.map((c) => (
+                      <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div>
+                  <span className="text-sm text-blue-600">汇率</span>
+                  <span className="text-base font-bold ml-2">
+                    {formData.currency === 'CNY'
+                      ? 'CNY 为本位币（无需换算）'
+                      : `${formData.currency}/CNY = ${exchangeRate.toFixed(4)}`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-blue-500">更新于 {formatTime(rateUpdatedAt)}</span>
+                  <Button variant="ghost" size="sm" onClick={fetchExchangeRate} disabled={rateLoading}>
+                    <RefreshCw className={`w-4 h-4 ${rateLoading ? 'animate-spin' : ''}`} />
+                  </Button>
+                </div>
+              </div>
+            </div>
+
             {multiResultsFactory &&
               calcProducts.filter((p) => parseFloat(p.costPrice) > 0).length >= 2 && (
                 <div className="border rounded-lg p-3 bg-gray-50/50">
@@ -1398,34 +1540,15 @@ export default function QuotePage() {
                   )}
                 </div>
               )}
+          </CardContent>
+        </Card>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">期望利润率 (%) *</label>
-                <Input
-                  type="number"
-                  value={formData.profitRate}
-                  onChange={(e) => setFormData({ ...formData, profitRate: e.target.value })}
-                  placeholder="10"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">目标货币</label>
-                <Select value={formData.currency} onValueChange={(v) => v && handleCurrencyChange(v)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {currencies.map((c) => (
-                      <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="space-y-2 pt-2 border-t">
-              <h3 className="text-sm font-semibold text-gray-800">出厂价（EXW）</h3>
+        {/* ③ 出厂价（不含物流四项） */}
+        <Card>
+          <CardContent className="p-6 space-y-3">
+            {stepTitle(3, '出厂价（EXW）')}
+            <p className="text-xs text-gray-500">仅含产品成本与利润，不含下方国内/海运/目的港/保险。</p>
+            <div className="space-y-2 pt-1">
               {!multiResultsFactory ? (
                 <p className="text-xs text-gray-400">请输入有效成本与数量</p>
               ) : (
@@ -1461,8 +1584,15 @@ export default function QuotePage() {
                 </div>
               )}
             </div>
+          </CardContent>
+        </Card>
 
-            <div className="space-y-3 pt-2 border-t">
+        {/* ④ 物流费用 + 物流术语结果 */}
+        <Card>
+          <CardContent className="p-6 space-y-4">
+            {stepTitle(4, '物流费用与报价（贸易术语）')}
+            <p className="text-xs text-gray-500">国内、海运、目的港、保险按数量分摊后，计入下列各术语总价。</p>
+            <div className="space-y-3">
               <h3 className="text-sm font-semibold text-gray-800">物流费用</h3>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
@@ -1562,9 +1692,13 @@ export default function QuotePage() {
                 </div>
               )}
             </div>
+          </CardContent>
+        </Card>
 
-            {/* LCL/FCL — 参考对比，不计入主表公式 */}
-            <div className="flex items-center gap-2 pt-2 border-t">
+        {/* ④ 附：散货/整柜参考（不计入主表） */}
+        <Card className="border-dashed">
+          <CardContent className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
               <input
                 type="checkbox"
                 id="showLCLFCL"
@@ -1573,10 +1707,9 @@ export default function QuotePage() {
                 className="w-4 h-4"
               />
               <label htmlFor="showLCLFCL" className="text-sm font-medium">
-                阶梯报价（散货 vs 整柜）
+                阶梯参考（散货 vs 整柜）
               </label>
             </div>
-
             {showLCLFCL && (
               <div className="bg-gray-50 p-4 rounded-lg space-y-4">
                 <div className="grid grid-cols-2 gap-4">
@@ -1609,22 +1742,46 @@ export default function QuotePage() {
           </CardContent>
         </Card>
 
-        {/* ── Right: PI + PDF */}
-        <div className="space-y-4">
-          <h2 className="font-bold">PI 与 PDF</h2>
-
-          {!multiResultsFactory ? (
+        {/* ⑤ 输出单证 + PDF */}
+        {!multiResultsFactory ? (
             <Card>
               <CardContent className="py-12 text-center text-gray-500">
-                请输入产品成本和数量
+                请先填写有效的产品成本与数量，再查看出厂价与输出选项。
               </CardContent>
             </Card>
           ) : (
             <>
               <Card>
-                <CardContent className="p-4 space-y-3">
-                  <h3 className="font-semibold text-sm">PI 输出</h3>
-                  <div className="flex flex-col gap-2 text-sm">
+                <CardContent className="p-5 space-y-4">
+                  {stepTitle(5, '输出单证与价格板块')}
+                  <p className="text-xs text-gray-500">
+                    先选要出的单据类型（Quotation / PI 等），再选价格板块（出厂 / 物流 / 双板块）。生成前可在下一步填写付款与交货条件。
+                  </p>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">单据类型</label>
+                    <Select
+                      value={quoteDetails.documentKind}
+                      onValueChange={(v) =>
+                        setQuoteDetails({
+                          ...quoteDetails,
+                          documentKind: (v || quoteDetails.documentKind) as 'QUOTATION' | 'PL' | 'PI' | 'CI',
+                        })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="QUOTATION">Quotation（报价单）</SelectItem>
+                        <SelectItem value="PI">Proforma Invoice（PI）</SelectItem>
+                        <SelectItem value="PL">Packing List（PL）</SelectItem>
+                        <SelectItem value="CI">Commercial Invoice（CI）</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="border-t pt-3 space-y-2">
+                    <h3 className="font-semibold text-sm text-gray-800">价格板块（用于 PDF 行价与摘要）</h3>
+                    <div className="flex flex-col gap-2 text-sm">
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="radio"
@@ -1655,7 +1812,7 @@ export default function QuotePage() {
                       />
                       出厂价 + 物流术语（双板块）
                     </label>
-                  </div>
+                    </div>
                   {(piOutputScope === 'logistics' || piOutputScope === 'both') && (
                     <div className="space-y-2">
                       <label className="text-xs font-medium text-gray-600">物流价主术语（PDF 行价 / 摘要）</label>
@@ -1715,16 +1872,17 @@ export default function QuotePage() {
                       )}
                     </>
                   )}
+                  </div>
                 </CardContent>
               </Card>
 
               <Card>
-                <CardContent className="p-4 space-y-3">
+                <CardContent className="p-5 space-y-3">
+                  {stepTitle(6, 'PDF 明细行')}
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <h3 className="font-semibold text-sm">产品报价（PDF 明细行）</h3>
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        编辑区与出厂价 EXW 同步；保存/预览时按上方 PI 输出选项重算单价与合计。
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        与计算器产品行对齐；编辑区与出厂价 EXW 同步；保存/预览时按上方「价格板块」重算单价与合计。
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -1905,14 +2063,12 @@ export default function QuotePage() {
                 </CardContent>
               </Card>
 
-              <Button className="w-full" onClick={openQuoteDialog}>
+              <Button className="w-full" size="lg" onClick={openQuoteDialog}>
                 <FileText className="mr-2 h-4 w-4" />
-                生成报价单
+                下一步：确认条款并生成 PDF
               </Button>
             </>
           )}
-        </div>
-      </div>
 
       {/* ── Product Library Picker Dialog */}
       <Dialog open={productPickerRowId !== null} onOpenChange={(open) => { if (!open) setProductPickerRowId(null) }}>
@@ -2071,28 +2227,16 @@ export default function QuotePage() {
                 )}
               </div>
 
-              <div className="space-y-2">
-                <label className="text-sm font-medium">单据类型</label>
-                <Select
-                  value={quoteDetails.documentKind}
-                  onValueChange={(v) =>
-                    setQuoteDetails({
-                      ...quoteDetails,
-                      documentKind: (v || quoteDetails.documentKind) as 'QUOTATION' | 'PL' | 'PI' | 'CI',
-                    })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="QUOTATION">Quotation</SelectItem>
-                    <SelectItem value="PI">Proforma Invoice (PI)</SelectItem>
-                    <SelectItem value="PL">Packing List (PL)</SelectItem>
-                    <SelectItem value="CI">Commercial Invoice (CI)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              <p className="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 border border-gray-100">
+                单据类型：
+                <span className="font-medium text-gray-900">
+                  {quoteDetails.documentKind === 'QUOTATION' && 'Quotation（报价单）'}
+                  {quoteDetails.documentKind === 'PI' && 'Proforma Invoice（PI）'}
+                  {quoteDetails.documentKind === 'PL' && 'Packing List（PL）'}
+                  {quoteDetails.documentKind === 'CI' && 'Commercial Invoice（CI）'}
+                </span>
+                <span className="text-gray-500"> — 在主页面「⑤ 输出单证与价格板块」中修改。</span>
+              </p>
 
               {quoteDetails.documentKind === 'PI' && (
                 <>
