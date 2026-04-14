@@ -13,6 +13,7 @@ import {
   FileDown,
   History,
   Trash2,
+  Copy,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -589,6 +590,49 @@ export default function CiPlPage() {
     }
   }
 
+  const duplicateDraft = async (id: string) => {
+    try {
+      const res = await fetch(`/api/ci-pl/documents/${id}`)
+      const d = await res.json()
+      if (d.error) throw new Error(d.error)
+      const body = {
+        title: d.title ? `${d.title} (复制)` : null,
+        currency: d.currency,
+        customer_name: d.customer_name,
+        customer_contact: d.customer_contact,
+        customer_address: d.customer_address,
+        customer_phone: d.customer_phone,
+        reference_number: d.reference_number ? `${d.reference_number}-copy` : null,
+        port_of_loading: d.port_of_loading,
+        port_of_discharge: d.port_of_discharge,
+        vessel_voyage: d.vessel_voyage,
+        container_number: '',   // 新货柜号需要手动填
+        seal_number: '',
+        trade_term: d.trade_term,
+        payment_terms: d.payment_terms,
+        container_notes: d.container_notes,
+        quote_mode: 'product_list',
+        source: d.source,
+        quotation_id: d.quotation_id,
+        products: d.products,
+      }
+      const res2 = await fetch('/api/ci-pl/documents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data2 = await res2.json()
+      if (!res2.ok) throw new Error(data2.error || '复制失败')
+      toast.success('已复制，请修改货柜号和产品明细')
+      loadDraftList()
+      // 自动打开复制后的草稿
+      loadDocument(data2.id)
+      setWorkspaceTab('editor')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '复制失败')
+    }
+  }
+
   // ── Render ──
 
   const draftListCard = (
@@ -605,29 +649,42 @@ export default function CiPlPage() {
         ) : draftList.length === 0 ? (
           <p className="text-gray-500">暂无保存的草稿</p>
         ) : (
-          <ul className="divide-y rounded border max-h-64 overflow-y-auto">
+          <div>
+          <ul className="divide-y rounded border max-h-72 overflow-y-auto">
             {draftList.map((d) => (
-              <li key={d.id} className="flex items-center justify-between gap-2 px-2 py-1.5">
+              <li key={d.id} className="flex items-center justify-between gap-1 px-2 py-1.5">
                 <Link
                   href={`/documents/ci-pl?id=${d.id}`}
-                  className="truncate text-blue-600 hover:underline flex-1"
+                  className="truncate text-blue-600 hover:underline flex-1 text-xs"
                   onClick={() => setWorkspaceTab('editor')}
                 >
                   {d.title || d.id.slice(0, 8)} · {d.currency}
                 </Link>
-                <span className="text-xs text-gray-400 shrink-0">
+                <span className="text-xs text-gray-400 shrink-0 hidden sm:block">
                   {new Date(d.updated_at).toLocaleString('zh-CN')}
                 </span>
                 <button
                   type="button"
-                  className="text-red-400 hover:text-red-600 p-1"
+                  title="复制此草稿（用于同批次下一个货柜）"
+                  className="text-gray-400 hover:text-blue-600 p-1 shrink-0"
+                  onClick={() => duplicateDraft(d.id)}
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  className="text-red-400 hover:text-red-600 p-1 shrink-0"
                   onClick={() => deleteDraft(d.id)}
                 >
-                  <Trash2 className="w-4 h-4" />
+                  <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </li>
             ))}
           </ul>
+          <p className="text-xs text-gray-400 mt-1">
+            提示：每个草稿对应一个货柜。同批次多货柜时，点 <Copy className="inline w-3 h-3" /> 复制草稿再改货柜号即可。
+          </p>
+          </div>
         )}
       </CardContent>
     </Card>
@@ -643,7 +700,7 @@ export default function CiPlPage() {
             CI / PL 生成
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            Commercial Invoice（商业发票）与 Packing List（装箱单）：上传工厂 PL → 补充信息 → 导出 PDF。
+            每个草稿 = 一个货柜 = 一套 CI + PL。上传工厂 PL → 填入货柜/港口信息 → 导出 PDF。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -880,10 +937,7 @@ export default function CiPlPage() {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex gap-2">
                     <Button type="button" variant="outline" size="sm" onClick={() => setLines((prev) => [...prev, emptyLine()])}>
-                      + 产品行
-                    </Button>
-                    <Button type="button" variant="outline" size="sm" onClick={() => setLines((prev) => [...prev, headerLine()])}>
-                      + 分组标题
+                      + 添加产品行
                     </Button>
                   </div>
                   <div className="text-xs text-gray-600 flex flex-wrap gap-x-4 gap-y-1">
@@ -918,75 +972,57 @@ export default function CiPlPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {lines.map((row) =>
-                        row.is_container_header ? (
-                          <tr key={row.id} className="border-t bg-amber-50">
-                            <td className="p-1" colSpan={14}>
-                              <Input
-                                className="font-medium border-amber-200 text-xs"
-                                value={row.name}
-                                onChange={(e) => updateLine(row.id, { name: e.target.value })}
-                                placeholder="货柜 / 分组标题（如：40HQ Container No.1）"
-                              />
-                            </td>
-                            <td className="p-1 text-center">
-                              {lines.length > 1 && (
-                                <button type="button" className="text-red-400" onClick={() => setLines((p) => p.filter((x) => x.id !== row.id))}>×</button>
-                              )}
-                            </td>
-                          </tr>
-                        ) : (
-                          <tr key={row.id} className="border-t hover:bg-gray-50">
-                            <td className="p-1">
-                              <Input className="text-xs" value={row.name} onChange={(e) => updateLine(row.id, { name: e.target.value })} placeholder="产品描述" />
-                            </td>
-                            <td className="p-1">
-                              <Input className="text-xs" value={row.model} onChange={(e) => updateLine(row.id, { model: e.target.value })} />
-                            </td>
-                            <td className="p-1">
-                              <Input className="text-xs" value={row.hs_code} onChange={(e) => updateLine(row.id, { hs_code: e.target.value })} placeholder="8541.40" />
-                            </td>
-                            <td className="p-1">
-                              <Input className="text-xs" value={row.size} onChange={(e) => updateLine(row.id, { size: e.target.value })} placeholder="60*40*30" />
-                            </td>
-                            <td className="p-1">
-                              <Input className="text-xs" value={row.material} onChange={(e) => updateLine(row.id, { material: e.target.value })} placeholder="ABS+PC" />
-                            </td>
-                            <td className="p-1">
-                              <Input className="text-xs" value={row.country_of_origin} onChange={(e) => updateLine(row.id, { country_of_origin: e.target.value })} placeholder="CHINA" />
-                            </td>
-                            <td className="p-1">
-                              <Input type="number" className="text-right text-xs" value={row.qty} onChange={(e) => updateLine(row.id, { qty: parseFloat(e.target.value) || 0 })} />
-                            </td>
-                            <td className="p-1">
-                              <Input className="text-xs" value={row.unit} onChange={(e) => updateLine(row.id, { unit: e.target.value })} />
-                            </td>
-                            <td className="p-1">
-                              <Input type="number" className="text-right text-xs" value={row.no_of_packages || ''} onChange={(e) => updateLine(row.id, { no_of_packages: parseFloat(e.target.value) || 0 })} />
-                            </td>
-                            <td className="p-1">
-                              <Input type="number" className="text-right text-xs" value={row.cbm || ''} onChange={(e) => updateLine(row.id, { cbm: parseFloat(e.target.value) || 0 })} />
-                            </td>
-                            <td className="p-1">
-                              <Input type="number" className="text-right text-xs" value={row.nw || ''} onChange={(e) => updateLine(row.id, { nw: parseFloat(e.target.value) || 0 })} />
-                            </td>
-                            <td className="p-1">
-                              <Input type="number" className="text-right text-xs" value={row.gw || ''} onChange={(e) => updateLine(row.id, { gw: parseFloat(e.target.value) || 0 })} />
-                            </td>
-                            <td className="p-1">
-                              <Input type="number" className="text-right text-xs" value={row.unit_price_foreign || ''} onChange={(e) => updateLine(row.id, { unit_price_foreign: parseFloat(e.target.value) || 0 })} />
-                            </td>
-                            <td className="p-2 text-right font-medium text-xs">
-                              {row.amount_foreign > 0 ? `${sym}${row.amount_foreign.toFixed(2)}` : ''}
-                            </td>
-                            <td className="p-1 text-center">
-                              {lines.length > 1 && (
-                                <button type="button" className="text-red-400" onClick={() => setLines((p) => p.filter((x) => x.id !== row.id))}>×</button>
-                              )}
-                            </td>
-                          </tr>
-                        )
-                      )}
+                      {lines.filter((r) => !r.is_container_header).map((row) => (
+                        <tr key={row.id} className="border-t hover:bg-gray-50">
+                          <td className="p-1">
+                            <Input className="text-xs" value={row.name} onChange={(e) => updateLine(row.id, { name: e.target.value })} placeholder="产品描述" />
+                          </td>
+                          <td className="p-1">
+                            <Input className="text-xs" value={row.model} onChange={(e) => updateLine(row.id, { model: e.target.value })} />
+                          </td>
+                          <td className="p-1">
+                            <Input className="text-xs" value={row.hs_code} onChange={(e) => updateLine(row.id, { hs_code: e.target.value })} placeholder="8541.40" />
+                          </td>
+                          <td className="p-1">
+                            <Input className="text-xs" value={row.size} onChange={(e) => updateLine(row.id, { size: e.target.value })} placeholder="60*40*30" />
+                          </td>
+                          <td className="p-1">
+                            <Input className="text-xs" value={row.material} onChange={(e) => updateLine(row.id, { material: e.target.value })} placeholder="ABS+PC" />
+                          </td>
+                          <td className="p-1">
+                            <Input className="text-xs" value={row.country_of_origin} onChange={(e) => updateLine(row.id, { country_of_origin: e.target.value })} placeholder="CHINA" />
+                          </td>
+                          <td className="p-1">
+                            <Input type="number" className="text-right text-xs" value={row.qty} onChange={(e) => updateLine(row.id, { qty: parseFloat(e.target.value) || 0 })} />
+                          </td>
+                          <td className="p-1">
+                            <Input className="text-xs" value={row.unit} onChange={(e) => updateLine(row.id, { unit: e.target.value })} />
+                          </td>
+                          <td className="p-1">
+                            <Input type="number" className="text-right text-xs" value={row.no_of_packages || ''} onChange={(e) => updateLine(row.id, { no_of_packages: parseFloat(e.target.value) || 0 })} />
+                          </td>
+                          <td className="p-1">
+                            <Input type="number" className="text-right text-xs" value={row.cbm || ''} onChange={(e) => updateLine(row.id, { cbm: parseFloat(e.target.value) || 0 })} />
+                          </td>
+                          <td className="p-1">
+                            <Input type="number" className="text-right text-xs" value={row.nw || ''} onChange={(e) => updateLine(row.id, { nw: parseFloat(e.target.value) || 0 })} />
+                          </td>
+                          <td className="p-1">
+                            <Input type="number" className="text-right text-xs" value={row.gw || ''} onChange={(e) => updateLine(row.id, { gw: parseFloat(e.target.value) || 0 })} />
+                          </td>
+                          <td className="p-1">
+                            <Input type="number" className="text-right text-xs" value={row.unit_price_foreign || ''} onChange={(e) => updateLine(row.id, { unit_price_foreign: parseFloat(e.target.value) || 0 })} />
+                          </td>
+                          <td className="p-2 text-right font-medium text-xs">
+                            {row.amount_foreign > 0 ? `${sym}${row.amount_foreign.toFixed(2)}` : ''}
+                          </td>
+                          <td className="p-1 text-center">
+                            {lines.filter((r) => !r.is_container_header).length > 1 && (
+                              <button type="button" className="text-red-400" onClick={() => setLines((p) => p.filter((x) => x.id !== row.id))}>×</button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
