@@ -69,14 +69,18 @@ interface QuoteResult {
   priceCNY: number
 }
 
+type PricingMode = 'margin' | 'order_markup_pct' | 'order_markup_fixed'
+
 // One row in the calculator's product input table
 interface CalcProductRow {
   id: string
   name: string
   model: string
   unit: string
-  costPrice: string  // CNY per unit, string for input
-  quantity: string   // quantity, string for input
+  costPrice: string // 工厂价 ¥/单位
+  quantity: string
+  /** 对外单价（目标货币/单位）；填写则按此行反推利润率，覆盖整单规则 */
+  quoteUnitForeign: string
 }
 
 interface MultiProductQuoteResult {
@@ -212,12 +216,11 @@ function calculateQuote(
 
 // Allocates shared costs proportionally by quantity across multiple products
 function calculateMultiProductQuote(
-  products: { id: string; costPrice: number; quantity: number }[],
+  products: { id: string; costPrice: number; quantity: number; profitRate: number }[],
   domesticCost: number,
   freight: number,
   destinationCost: number,
   insuranceRate: number,
-  profitRate: number,
   exchangeRate: number
 ): MultiProductQuoteResult {
   const totalQty = products.reduce((s, p) => s + p.quantity, 0)
@@ -232,7 +235,7 @@ function calculateMultiProductQuote(
       freight * share,
       destinationCost * share,
       insuranceRate,
-      profitRate,
+      p.profitRate,
       exchangeRate
     )
     return { productId: p.id, results }
@@ -251,6 +254,62 @@ function calculateMultiProductQuote(
   })
 
   return { byProduct, orderTotals }
+}
+
+/**
+ * 主路径：整单规则 → 初版；若某行填对外单价则该行覆盖利润规则（见 UI 说明）。
+ * costPrice = 工厂 ¥/单位（可含整单固定加价分摊）；profitRate = 该行对 EXW 的有效利润率%
+ */
+function buildCalcProductInputs(
+  calcProducts: CalcProductRow[],
+  pricingMode: PricingMode,
+  profitRateStr: string,
+  orderMarkupPercentStr: string,
+  orderMarkupFixedStr: string,
+  exchangeRate: number
+): { id: string; costPrice: number; quantity: number; profitRate: number }[] | null {
+  const raw = calcProducts
+    .map((p) => ({
+      id: p.id,
+      unitCost: parseFloat(p.costPrice) || 0,
+      qty: parseFloat(p.quantity) || 0,
+      quoteForeign: parseFloat(p.quoteUnitForeign) || 0,
+    }))
+    .filter((p) => p.unitCost > 0 && p.qty > 0)
+
+  if (raw.length === 0) return null
+
+  const totalFactory = raw.reduce((s, p) => s + p.unitCost * p.qty, 0)
+  const fixedAmt = parseFloat(orderMarkupFixedStr) || 0
+
+  return raw.map((p) => {
+    let unitCost = p.unitCost
+
+    if (pricingMode === 'order_markup_fixed' && totalFactory > 0 && fixedAmt > 0) {
+      const lineFactory = p.unitCost * p.qty
+      const addPerUnit = (lineFactory / totalFactory) * fixedAmt / p.qty
+      unitCost = p.unitCost + addPerUnit
+    }
+
+    let profitRate =
+      pricingMode === 'margin'
+        ? parseFloat(profitRateStr) || 10
+        : pricingMode === 'order_markup_pct'
+          ? parseFloat(orderMarkupPercentStr) || 0
+          : parseFloat(profitRateStr) || 0
+
+    if (p.quoteForeign > 0 && exchangeRate > 0) {
+      const priceCNY = p.quoteForeign / exchangeRate
+      profitRate = (priceCNY / unitCost - 1) * 100
+    }
+
+    return {
+      id: p.id,
+      costPrice: unitCost,
+      quantity: p.qty,
+      profitRate,
+    }
+  })
 }
 
 function calculateDiscount(lclFreight: number, fclFreight: number, lclQty: number): number {
@@ -324,7 +383,7 @@ export default function QuotePage() {
 
   // ── Calculator inputs
   const [calcProducts, setCalcProducts] = useState<CalcProductRow[]>([
-    { id: crypto.randomUUID(), name: '', model: '', unit: 'pc', costPrice: '', quantity: '100' },
+    { id: crypto.randomUUID(), name: '', model: '', unit: 'pc', costPrice: '', quantity: '100', quoteUnitForeign: '' },
   ])
   const [productPickerRowId, setProductPickerRowId] = useState<string | null>(null)
   const [formData, setFormData] = useState({
@@ -333,6 +392,9 @@ export default function QuotePage() {
     destinationCost: '0',
     insuranceRate: '0.3',
     profitRate: '10',
+    pricingMode: 'margin' as PricingMode,
+    orderMarkupPercent: '8',
+    orderMarkupFixed: '0',
     currency: 'USD',
   })
   const [showLCLFCL, setShowLCLFCL] = useState(false)
@@ -403,38 +465,37 @@ export default function QuotePage() {
   // ── Computed values
   /** 出厂价：不含国内/海运/目的港/保险，仅成本+利润 → 与 EXW 一致 */
   const multiResultsFactory = useMemo(() => {
-    const valid = calcProducts
-      .map((p) => ({
-        id: p.id,
-        costPrice: parseFloat(p.costPrice) || 0,
-        quantity: parseFloat(p.quantity) || 0,
-      }))
-      .filter((p) => p.costPrice > 0 && p.quantity > 0)
-
-    if (valid.length === 0) return null
-
-    return calculateMultiProductQuote(
-      valid,
-      0,
-      0,
-      0,
-      0,
-      parseFloat(formData.profitRate) || 10,
+    const valid = buildCalcProductInputs(
+      calcProducts,
+      formData.pricingMode,
+      formData.profitRate,
+      formData.orderMarkupPercent,
+      formData.orderMarkupFixed,
       exchangeRate
     )
-  }, [calcProducts, formData.profitRate, exchangeRate])
+    if (!valid || valid.length === 0) return null
+
+    return calculateMultiProductQuote(valid, 0, 0, 0, 0, exchangeRate)
+  }, [
+    calcProducts,
+    formData.pricingMode,
+    formData.profitRate,
+    formData.orderMarkupPercent,
+    formData.orderMarkupFixed,
+    exchangeRate,
+  ])
 
   /** 含物流费用的全量术语报价 */
   const multiResultsLogistics = useMemo(() => {
-    const valid = calcProducts
-      .map((p) => ({
-        id: p.id,
-        costPrice: parseFloat(p.costPrice) || 0,
-        quantity: parseFloat(p.quantity) || 0,
-      }))
-      .filter((p) => p.costPrice > 0 && p.quantity > 0)
-
-    if (valid.length === 0) return null
+    const valid = buildCalcProductInputs(
+      calcProducts,
+      formData.pricingMode,
+      formData.profitRate,
+      formData.orderMarkupPercent,
+      formData.orderMarkupFixed,
+      exchangeRate
+    )
+    if (!valid || valid.length === 0) return null
 
     return calculateMultiProductQuote(
       valid,
@@ -442,7 +503,6 @@ export default function QuotePage() {
       parseFloat(formData.freight) || 0,
       parseFloat(formData.destinationCost) || 0,
       parseFloat(formData.insuranceRate) || 0.3,
-      parseFloat(formData.profitRate) || 10,
       exchangeRate
     )
   }, [calcProducts, formData, exchangeRate])
@@ -461,6 +521,41 @@ export default function QuotePage() {
     [multiResultsFactory]
   )
 
+  const factoryCostTotalCNY = useMemo(
+    () =>
+      calcProducts.reduce(
+        (s, p) => s + (parseFloat(p.costPrice) || 0) * (parseFloat(p.quantity) || 0),
+        0
+      ),
+    [calcProducts]
+  )
+
+  const calcInputsForDisplay = useMemo(
+    () =>
+      buildCalcProductInputs(
+        calcProducts,
+        formData.pricingMode,
+        formData.profitRate,
+        formData.orderMarkupPercent,
+        formData.orderMarkupFixed,
+        exchangeRate
+      ),
+    [
+      calcProducts,
+      formData.pricingMode,
+      formData.profitRate,
+      formData.orderMarkupPercent,
+      formData.orderMarkupFixed,
+      exchangeRate,
+    ]
+  )
+
+  const marginById = useMemo(() => {
+    const m = new Map<string, number>()
+    calcInputsForDisplay?.forEach((p) => m.set(p.id, p.profitRate))
+    return m
+  }, [calcInputsForDisplay])
+
   // ── Effects
   useEffect(() => {
     fetchLibraryProducts()
@@ -471,8 +566,23 @@ export default function QuotePage() {
     if (draftJson) {
       try {
         const draft = JSON.parse(draftJson)
-        if (draft.calcProducts) setCalcProducts(draft.calcProducts)
-        if (draft.formData) setFormData((prev) => ({ ...prev, ...draft.formData }))
+        if (draft.calcProducts) {
+          setCalcProducts(
+            draft.calcProducts.map((r: CalcProductRow) => ({
+              ...r,
+              quoteUnitForeign: r.quoteUnitForeign ?? '',
+            }))
+          )
+        }
+        if (draft.formData) {
+          setFormData((prev) => ({
+            ...prev,
+            ...draft.formData,
+            pricingMode: (draft.formData.pricingMode as PricingMode) || prev.pricingMode,
+            orderMarkupPercent: draft.formData.orderMarkupPercent ?? prev.orderMarkupPercent,
+            orderMarkupFixed: draft.formData.orderMarkupFixed ?? prev.orderMarkupFixed,
+          }))
+        }
         if (draft.quoteDetails) setQuoteDetails((prev) => ({ ...prev, ...draft.quoteDetails }))
         if (draft.quoteLayoutMode === 'container_group' || draft.quoteLayoutMode === 'product_list') {
           setQuoteLayoutMode(draft.quoteLayoutMode)
@@ -492,14 +602,30 @@ export default function QuotePage() {
       const savedParams = localStorage.getItem('leadspark_calc_params')
       if (savedParams) {
         try {
-          const params = JSON.parse(savedParams)
-          setFormData((prev) => ({ ...prev, ...params }))
+          const params = JSON.parse(savedParams) as Record<string, unknown>
+          setFormData((prev) => ({
+            ...prev,
+            ...params,
+            pricingMode: (params.pricingMode as PricingMode) || prev.pricingMode,
+            orderMarkupPercent:
+              typeof params.orderMarkupPercent === 'string'
+                ? params.orderMarkupPercent
+                : prev.orderMarkupPercent,
+            orderMarkupFixed:
+              typeof params.orderMarkupFixed === 'string' ? params.orderMarkupFixed : prev.orderMarkupFixed,
+          }))
         } catch { /* ignore */ }
       }
       const savedProducts = localStorage.getItem('leadspark_calc_products')
       if (savedProducts) {
         try {
-          setCalcProducts(JSON.parse(savedProducts))
+          const parsed = JSON.parse(savedProducts) as CalcProductRow[]
+          setCalcProducts(
+            parsed.map((r) => ({
+              ...r,
+              quoteUnitForeign: r.quoteUnitForeign ?? '',
+            }))
+          )
         } catch { /* ignore */ }
       }
     }
@@ -652,7 +778,15 @@ export default function QuotePage() {
   const addCalcProduct = () => {
     setCalcProducts((prev) => [
       ...prev,
-      { id: crypto.randomUUID(), name: '', model: '', unit: 'pc', costPrice: '', quantity: '100' },
+      {
+        id: crypto.randomUUID(),
+        name: '',
+        model: '',
+        unit: 'pc',
+        costPrice: '',
+        quantity: '100',
+        quoteUnitForeign: '',
+      },
     ])
   }
 
@@ -891,6 +1025,9 @@ export default function QuotePage() {
             destination_cost: parseFloat(formData.destinationCost) || 0,
             insurance_rate: parseFloat(formData.insuranceRate) || 0.3,
             profit_rate: parseFloat(formData.profitRate) || 10,
+            pricing_mode: formData.pricingMode,
+            order_markup_percent: parseFloat(formData.orderMarkupPercent) || 0,
+            order_markup_fixed: parseFloat(formData.orderMarkupFixed) || 0,
           },
           total_amount_foreign: totalForeign,
           total_amount_cny: totalCNY,
@@ -1227,7 +1364,7 @@ export default function QuotePage() {
           <div className="min-w-0">
             <h1 className="text-2xl font-bold">报价</h1>
             <p className="text-xs text-gray-500 mt-0.5 hidden sm:block">
-              客户 → 产品与算价（含 EXW）→ PDF 明细/货柜 → 物流价 → 输出单证与 PDF
+              整单定价 → 产品行（可填对外价覆盖）→ EXW → PDF/货柜 → 物流 → 输出
             </p>
           </div>
         </div>
@@ -1346,93 +1483,206 @@ export default function QuotePage() {
       <Card>
         <CardContent className="p-6 space-y-5">
           {stepTitle(2, '产品与算价')}
-            <p className="text-xs text-gray-500">
-              填写产品成本、数量、利润率与目标货币；同块内展示汇率与出厂价（EXW）小计（不含国内/海运/目的港/保险）。
-            </p>
+            <div className="rounded-md bg-slate-50 border border-slate-200 px-3 py-2.5 text-xs text-slate-700 space-y-1.5">
+              <p className="font-medium text-slate-800">主路径（全行业通用）</p>
+              <ol className="list-decimal list-inside space-y-0.5 text-slate-600">
+                <li>先选下方「整单定价方式」，由系统按工厂价统一算出各行初版卖价。</li>
+                <li>某行需要谈死价或单独定价时，再填「对外单价」——该行以对外价为准，不再套用整单利润率/加价%，仅反推展示利润%。</li>
+                <li>整单额外费用（手续费等）建议做 PI 单独费用行，一般不再叠乘到已锁行价上。</li>
+              </ol>
+            </div>
 
-          {/* Product Table */}
+            <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50/50 p-4">
+              <div>
+                <label className="text-sm font-medium">整单定价方式</label>
+                <p className="text-xs text-gray-500 mt-1">先定规则，再在产品表里出数；未填「对外单价」的行都走这里。</p>
+              </div>
+              <Select
+                value={formData.pricingMode}
+                onValueChange={(v) => v && setFormData({ ...formData, pricingMode: v as PricingMode })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="margin">按期望利润率 (%)</SelectItem>
+                  <SelectItem value="order_markup_pct">整单统一加价 (%)</SelectItem>
+                  <SelectItem value="order_markup_fixed">整单固定加价 (¥) 分摊到各行，并可再加利润率</SelectItem>
+                </SelectContent>
+              </Select>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {formData.pricingMode === 'margin' && (
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-gray-600">期望利润率 (%)</label>
+                    <Input
+                      type="number"
+                      value={formData.profitRate}
+                      onChange={(e) => setFormData({ ...formData, profitRate: e.target.value })}
+                      placeholder="10"
+                    />
+                  </div>
+                )}
+                {formData.pricingMode === 'order_markup_pct' && (
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-gray-600">整单统一加价 (%)</label>
+                    <Input
+                      type="number"
+                      value={formData.orderMarkupPercent}
+                      onChange={(e) => setFormData({ ...formData, orderMarkupPercent: e.target.value })}
+                      placeholder="8"
+                    />
+                  </div>
+                )}
+                {formData.pricingMode === 'order_markup_fixed' && (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium text-gray-600">整单固定加价 (¥)</label>
+                      <Input
+                        type="number"
+                        value={formData.orderMarkupFixed}
+                        onChange={(e) => setFormData({ ...formData, orderMarkupFixed: e.target.value })}
+                        placeholder="0"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium text-gray-600">分摊后再加利润率 (%)</label>
+                      <Input
+                        type="number"
+                        value={formData.profitRate}
+                        onChange={(e) => setFormData({ ...formData, profitRate: e.target.value })}
+                        placeholder="0"
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+              <p className="text-xs text-gray-600 border-t border-gray-200 pt-3">
+                <span className="font-medium text-gray-700">行级例外：</span>
+                产品表中若填写「对外单价」，则该行卖价以对外价为准，整单利润率/加价规则不再作用于该行的利润计算（与整单固定加价分摊后的成本底对比后反推利润%）。
+              </p>
+            </div>
+
             <div className="space-y-2">
               <label className="text-sm font-medium">产品列表</label>
-              <div className="border rounded-lg overflow-hidden">
-                <table className="w-full text-xs">
+              <div className="border rounded-lg overflow-x-auto">
+                <table className="w-full text-xs min-w-[720px]">
                   <thead className="bg-gray-50 border-b">
                     <tr>
-                      <th className="text-left p-2 font-medium text-gray-500">名称</th>
-                      <th className="text-left p-2 font-medium text-gray-500 w-20">型号</th>
-                      <th className="text-left p-2 font-medium text-gray-500 w-14">单位</th>
-                      <th className="text-right p-2 font-medium text-gray-500 w-24">成本价(¥)*</th>
-                      <th className="text-right p-2 font-medium text-gray-500 w-20">数量*</th>
-                      <th className="w-8"></th>
+                      <th className="text-left p-2 font-medium text-gray-500 min-w-[100px]">名称</th>
+                      <th className="text-left p-2 font-medium text-gray-500 w-16">型号</th>
+                      <th className="text-left p-2 font-medium text-gray-500 w-12">单位</th>
+                      <th className="text-right p-2 font-medium text-gray-500 w-20">工厂价(¥)*</th>
+                      <th className="text-right p-2 font-medium text-gray-500 w-16">数量*</th>
+                      <th className="text-right p-2 font-medium text-gray-500 w-20">小计¥</th>
+                      <th
+                        className="text-right p-2 font-medium text-gray-500 w-[88px]"
+                        title="填则该行以该价为准，覆盖整单定价规则，仅反推利润%"
+                      >
+                        对外单价({sym})
+                      </th>
+                      <th className="text-right p-2 font-medium text-gray-500 w-14">利润%</th>
+                      <th className="w-8 p-2"></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {calcProducts.map((row) => (
-                      <tr key={row.id} className="border-t">
-                        <td className="p-1">
-                          <div className="flex items-center gap-1">
-                            <button
-                              type="button"
-                              title="从产品库选择"
-                              onClick={() => setProductPickerRowId(row.id)}
-                              className="flex-shrink-0 p-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-blue-600"
-                            >
-                              <Package className="w-3.5 h-3.5" />
-                            </button>
+                    {calcProducts.map((row) => {
+                      const unit = parseFloat(row.costPrice) || 0
+                      const qty = parseFloat(row.quantity) || 0
+                      const lineFactory = unit * qty
+                      const mr = marginById.get(row.id)
+                      return (
+                        <tr key={row.id} className="border-t">
+                          <td className="p-1">
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                title="从产品库选择"
+                                onClick={() => setProductPickerRowId(row.id)}
+                                className="flex-shrink-0 p-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-blue-600"
+                              >
+                                <Package className="w-3.5 h-3.5" />
+                              </button>
+                              <input
+                                className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
+                                value={row.name}
+                                onChange={(e) => updateCalcProduct(row.id, 'name', e.target.value)}
+                                placeholder="产品名称"
+                              />
+                            </div>
+                          </td>
+                          <td className="p-1">
                             <input
                               className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
-                              value={row.name}
-                              onChange={(e) => updateCalcProduct(row.id, 'name', e.target.value)}
-                              placeholder="产品名称"
+                              value={row.model}
+                              onChange={(e) => updateCalcProduct(row.id, 'model', e.target.value)}
+                              placeholder="型号"
                             />
-                          </div>
-                        </td>
-                        <td className="p-1">
-                          <input
-                            className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
-                            value={row.model}
-                            onChange={(e) => updateCalcProduct(row.id, 'model', e.target.value)}
-                            placeholder="型号"
-                          />
-                        </td>
-                        <td className="p-1">
-                          <input
-                            className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
-                            value={row.unit}
-                            onChange={(e) => updateCalcProduct(row.id, 'unit', e.target.value)}
-                            placeholder="pc"
-                          />
-                        </td>
-                        <td className="p-1">
-                          <input
-                            type="number"
-                            className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
-                            value={row.costPrice}
-                            onChange={(e) => updateCalcProduct(row.id, 'costPrice', e.target.value)}
-                            placeholder="0"
-                          />
-                        </td>
-                        <td className="p-1">
-                          <input
-                            type="number"
-                            className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
-                            value={row.quantity}
-                            onChange={(e) => updateCalcProduct(row.id, 'quantity', e.target.value)}
-                            placeholder="100"
-                          />
-                        </td>
-                        <td className="p-1 text-center">
-                          {calcProducts.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => removeCalcProduct(row.id)}
-                              className="text-gray-300 hover:text-red-500"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="p-1">
+                            <input
+                              className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
+                              value={row.unit}
+                              onChange={(e) => updateCalcProduct(row.id, 'unit', e.target.value)}
+                              placeholder="pc"
+                            />
+                          </td>
+                          <td className="p-1">
+                            <input
+                              type="number"
+                              className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
+                              value={row.costPrice}
+                              onChange={(e) => updateCalcProduct(row.id, 'costPrice', e.target.value)}
+                              placeholder="0"
+                            />
+                          </td>
+                          <td className="p-1">
+                            <input
+                              type="number"
+                              className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
+                              value={row.quantity}
+                              onChange={(e) => updateCalcProduct(row.id, 'quantity', e.target.value)}
+                              placeholder="100"
+                            />
+                          </td>
+                          <td className="p-1 text-right text-gray-600 tabular-nums">
+                            {unit > 0 && qty > 0 ? lineFactory.toFixed(2) : '—'}
+                          </td>
+                          <td className="p-1">
+                            <input
+                              type="number"
+                              step="any"
+                              className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
+                              value={row.quoteUnitForeign}
+                              onChange={(e) => updateCalcProduct(row.id, 'quoteUnitForeign', e.target.value)}
+                              placeholder="可选"
+                            />
+                          </td>
+                          <td className="p-1 text-right text-gray-600 tabular-nums">
+                            {mr != null && unit > 0 && qty > 0 ? `${mr.toFixed(1)}%` : '—'}
+                          </td>
+                          <td className="p-1 text-center">
+                            {calcProducts.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => removeCalcProduct(row.id)}
+                                className="text-gray-300 hover:text-red-500"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                    <tr className="border-t bg-gray-50/90 font-medium text-gray-800">
+                      <td colSpan={5} className="p-2 text-right text-xs">
+                        工厂成本合计（¥）
+                      </td>
+                      <td className="p-2 text-right text-xs tabular-nums">
+                        {factoryCostTotalCNY > 0 ? factoryCostTotalCNY.toFixed(2) : '—'}
+                      </td>
+                      <td colSpan={3} className="p-2 text-xs text-gray-500"></td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
@@ -1445,16 +1695,7 @@ export default function QuotePage() {
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">期望利润率 (%) *</label>
-                <Input
-                  type="number"
-                  value={formData.profitRate}
-                  onChange={(e) => setFormData({ ...formData, profitRate: e.target.value })}
-                  placeholder="10"
-                />
-              </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
               <div className="space-y-2">
                 <label className="text-sm font-medium">目标货币</label>
                 <Select value={formData.currency} onValueChange={(v) => v && handleCurrencyChange(v)}>
@@ -1468,63 +1709,62 @@ export default function QuotePage() {
                   </SelectContent>
                 </Select>
               </div>
-            </div>
-
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div>
-                  <span className="text-sm text-blue-600">汇率</span>
-                  <span className="text-base font-bold ml-2">
-                    {formData.currency === 'CNY'
-                      ? 'CNY 为本位币（无需换算）'
-                      : `${formData.currency}/CNY = ${exchangeRate.toFixed(4)}`}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-blue-500">更新于 {formatTime(rateUpdatedAt)}</span>
-                  <Button variant="ghost" size="sm" onClick={fetchExchangeRate} disabled={rateLoading}>
-                    <RefreshCw className={`w-4 h-4 ${rateLoading ? 'animate-spin' : ''}`} />
-                  </Button>
+              <div className="rounded-lg border border-gray-200 bg-white p-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div>
+                    <span className="text-sm text-gray-600">汇率</span>
+                    <span className="text-base font-semibold ml-2 text-gray-900">
+                      {formData.currency === 'CNY'
+                        ? 'CNY 为本位币（无需换算）'
+                        : `${formData.currency}/CNY = ${exchangeRate.toFixed(4)}`}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-400">更新于 {formatTime(rateUpdatedAt)}</span>
+                    <Button variant="ghost" size="sm" onClick={fetchExchangeRate} disabled={rateLoading}>
+                      <RefreshCw className={`w-4 h-4 ${rateLoading ? 'animate-spin' : ''}`} />
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div className="border-t pt-5 space-y-3">
-              <h3 className="text-sm font-semibold text-gray-800">出厂价（EXW）</h3>
-              <p className="text-xs text-gray-500">仅含产品成本与利润，不含国内/海运/目的港/保险。</p>
+            <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-4">
               {!multiResultsFactory ? (
-                <p className="text-xs text-gray-400">请输入有效成本与数量</p>
+                <p className="text-xs text-blue-800/80">填写有效工厂价与数量后显示 EXW 出厂合计。</p>
               ) : (
-                <div className="border rounded-lg overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b bg-gray-50">
-                        <th className="text-left p-2 font-medium text-gray-500">术语</th>
-                        <th className="text-right p-2 font-medium text-gray-500">{formData.currency} 合计</th>
-                        <th className="text-right p-2 font-medium text-gray-500">CNY 合计</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {multiResultsFactory.orderTotals
-                        .filter((r) => r.term === OUTPUT_TRADE_TERM)
-                        .map((r) => (
-                          <tr key={r.term} className="border-b bg-blue-50/80">
-                            <td className="p-2">
-                              <span className="font-mono font-medium">{r.term}</span>
-                              <span className="text-xs text-gray-400 ml-2">
-                                {TRADE_TERMS.find((t) => t.code === r.term)?.desc}
+                <>
+                  {multiResultsFactory.orderTotals
+                    .filter((r) => r.term === OUTPUT_TRADE_TERM)
+                    .map((r) => (
+                      <div
+                        key={r.term}
+                        className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4"
+                      >
+                        <span className="text-sm font-medium text-blue-900">EXW 出厂合计</span>
+                        <div className="text-right">
+                          {formData.currency !== 'CNY' ? (
+                            <>
+                              <span className="text-xl font-semibold text-blue-950 tabular-nums">
+                                {sym}
+                                {formatPrice(r.priceForeign)}
                               </span>
-                            </td>
-                            <td className="p-2 text-right font-medium">
-                              {sym}
-                              {formatPrice(r.priceForeign)}
-                            </td>
-                            <td className="p-2 text-right text-gray-500">¥{r.priceCNY.toFixed(2)}</td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
-                </div>
+                              <span className="text-sm text-blue-800/90 ml-2 tabular-nums">
+                                （¥{r.priceCNY.toFixed(2)}）
+                              </span>
+                            </>
+                          ) : (
+                            <span className="text-xl font-semibold text-blue-950 tabular-nums">
+                              ¥{formatPrice(r.priceCNY)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  <p className="text-xs text-blue-800/75 mt-2">
+                    含利润；不含国内/海运/目的港/保险（与下方物流报价无关）。
+                  </p>
+                </>
               )}
             </div>
 
@@ -1537,7 +1777,7 @@ export default function QuotePage() {
                     className="flex items-center gap-2 text-sm font-medium text-gray-700 w-full"
                   >
                     {showDetail ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                    产品明细（{OUTPUT_TRADE_TERM}）
+                    按产品明细
                   </button>
                   {showDetail && (
                     <div className="mt-3 space-y-2">
