@@ -1227,7 +1227,7 @@ export default function QuotePage() {
           <div className="min-w-0">
             <h1 className="text-2xl font-bold">报价</h1>
             <p className="text-xs text-gray-500 mt-0.5 hidden sm:block">
-              客户 → 产品与算价 → 出厂价 → 物流价 → 输出单证与 PDF
+              客户 → 产品与算价（含 EXW）→ PDF 明细/货柜 → 物流价 → 输出单证与 PDF
             </p>
           </div>
         </div>
@@ -1346,7 +1346,9 @@ export default function QuotePage() {
       <Card>
         <CardContent className="p-6 space-y-5">
           {stepTitle(2, '产品与算价')}
-          <p className="text-xs text-gray-500">填写产品成本、数量、利润率与目标货币；下方为人民币→目标货币的汇率。</p>
+            <p className="text-xs text-gray-500">
+              填写产品成本、数量、利润率与目标货币；同块内展示汇率与出厂价（EXW）小计（不含国内/海运/目的港/保险）。
+            </p>
 
           {/* Product Table */}
             <div className="space-y-2">
@@ -1487,6 +1489,45 @@ export default function QuotePage() {
               </div>
             </div>
 
+            <div className="border-t pt-5 space-y-3">
+              <h3 className="text-sm font-semibold text-gray-800">出厂价（EXW）</h3>
+              <p className="text-xs text-gray-500">仅含产品成本与利润，不含国内/海运/目的港/保险。</p>
+              {!multiResultsFactory ? (
+                <p className="text-xs text-gray-400">请输入有效成本与数量</p>
+              ) : (
+                <div className="border rounded-lg overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-gray-50">
+                        <th className="text-left p-2 font-medium text-gray-500">术语</th>
+                        <th className="text-right p-2 font-medium text-gray-500">{formData.currency} 合计</th>
+                        <th className="text-right p-2 font-medium text-gray-500">CNY 合计</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {multiResultsFactory.orderTotals
+                        .filter((r) => r.term === OUTPUT_TRADE_TERM)
+                        .map((r) => (
+                          <tr key={r.term} className="border-b bg-blue-50/80">
+                            <td className="p-2">
+                              <span className="font-mono font-medium">{r.term}</span>
+                              <span className="text-xs text-gray-400 ml-2">
+                                {TRADE_TERMS.find((t) => t.code === r.term)?.desc}
+                              </span>
+                            </td>
+                            <td className="p-2 text-right font-medium">
+                              {sym}
+                              {formatPrice(r.priceForeign)}
+                            </td>
+                            <td className="p-2 text-right text-gray-500">¥{r.priceCNY.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
             {multiResultsFactory &&
               calcProducts.filter((p) => parseFloat(p.costPrice) > 0).length >= 2 && (
                 <div className="border rounded-lg p-3 bg-gray-50/50">
@@ -1543,47 +1584,196 @@ export default function QuotePage() {
           </CardContent>
         </Card>
 
-        {/* ③ 出厂价（不含物流四项） */}
+        {/* ③ PDF 明细行：在填物流前确认列表/货柜分组，便于与海运与术语报价对齐 */}
         <Card>
           <CardContent className="p-6 space-y-3">
-            {stepTitle(3, '出厂价（EXW）')}
-            <p className="text-xs text-gray-500">仅含产品成本与利润，不含下方国内/海运/目的港/保险。</p>
-            <div className="space-y-2 pt-1">
-              {!multiResultsFactory ? (
-                <p className="text-xs text-gray-400">请输入有效成本与数量</p>
-              ) : (
+            {stepTitle(3, 'PDF 明细行（列表或按货柜）')}
+            <p className="text-xs text-gray-500">
+              与 ② 中产品行一一对应；若按货柜分组，建议先在此标好柜型/分组，再填下方物流费用，思路更顺。
+            </p>
+            {!multiResultsFactory ? (
+              <p className="text-xs text-gray-400">请先完成 ② 产品与算价中的有效成本与数量。</p>
+            ) : (
+              <>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="inline-flex rounded-md border border-gray-200 bg-white p-0.5 text-xs">
+                      <button
+                        type="button"
+                        className={`rounded px-2 py-1 ${quoteLayoutMode === 'product_list' ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                        onClick={() => {
+                          setQuoteLayoutMode('product_list')
+                          setPdfProducts((prev) => prev.filter((r) => !r.isContainerHeader))
+                        }}
+                      >
+                        产品列表
+                      </button>
+                      <button
+                        type="button"
+                        className={`rounded px-2 py-1 ${quoteLayoutMode === 'container_group' ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                        onClick={() => {
+                          setQuoteLayoutMode('container_group')
+                          setPdfProducts((prev) => {
+                            if (prev.some((r) => r.isContainerHeader)) return prev
+                            return [emptyContainerHeaderRow(), ...prev]
+                          })
+                        }}
+                      >
+                        按货柜分组
+                      </button>
+                    </div>
+                    {quoteLayoutMode === 'container_group' && (
+                      <button
+                        type="button"
+                        className="text-xs text-amber-700 hover:underline"
+                        onClick={() => setPdfProducts((prev) => [...prev, emptyContainerHeaderRow()])}
+                      >
+                        + 货柜标题
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="text-xs text-blue-600 hover:underline"
+                      onClick={() => {
+                        const price = selectedTradeResult?.priceForeign || 0
+                        setPdfProducts((prev) => [...prev, emptyProductPdfRow(price)])
+                      }}
+                    >
+                      + 添加行
+                    </button>
+                  </div>
+                </div>
                 <div className="border rounded-lg overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b bg-gray-50">
-                        <th className="text-left p-2 font-medium text-gray-500">术语</th>
-                        <th className="text-right p-2 font-medium text-gray-500">{formData.currency} 合计</th>
-                        <th className="text-right p-2 font-medium text-gray-500">CNY 合计</th>
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="text-left p-2 font-medium text-gray-500">产品名称</th>
+                        <th className="text-right p-2 font-medium text-gray-500 w-16">数量</th>
+                        <th className="text-right p-2 font-medium text-gray-500 w-20">单价</th>
+                        <th className="text-right p-2 font-medium text-gray-500 w-20">小计</th>
+                        <th className="p-2 w-6"></th>
                       </tr>
                     </thead>
                     <tbody>
-                      {multiResultsFactory.orderTotals
-                        .filter((r) => r.term === OUTPUT_TRADE_TERM)
-                        .map((r) => (
-                          <tr key={r.term} className="border-b bg-blue-50/80">
-                            <td className="p-2">
-                              <span className="font-mono font-medium">{r.term}</span>
-                              <span className="text-xs text-gray-400 ml-2">
-                                {TRADE_TERMS.find((t) => t.code === r.term)?.desc}
-                              </span>
+                      {pdfProducts.map((row, idx) =>
+                        row.isContainerHeader ? (
+                          <tr key={idx} className="border-t bg-amber-50/80">
+                            <td className="p-1" colSpan={4}>
+                              <input
+                                className="w-full text-xs border border-amber-200 rounded px-1 py-0.5 focus:outline-blue-400 font-medium"
+                                value={row.name}
+                                onChange={(e) => {
+                                  const u = [...pdfProducts]
+                                  u[idx] = { ...u[idx], name: e.target.value }
+                                  setPdfProducts(u)
+                                }}
+                                placeholder="货柜 / 分组标题（如 1×40HQ）"
+                              />
+                            </td>
+                            <td className="p-1 text-center">
+                              {pdfProducts.length > 1 && (
+                                <button
+                                  type="button"
+                                  className="text-red-400 hover:text-red-600"
+                                  onClick={() => setPdfProducts((prev) => prev.filter((_, i) => i !== idx))}
+                                >
+                                  ×
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ) : (
+                          <tr key={idx} className="border-t">
+                            <td className="p-1">
+                              <input
+                                className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
+                                value={row.name}
+                                onChange={(e) => {
+                                  const u = [...pdfProducts]
+                                  u[idx] = { ...u[idx], name: e.target.value }
+                                  setPdfProducts(u)
+                                }}
+                                placeholder="产品名称"
+                              />
+                            </td>
+                            <td className="p-1">
+                              <input
+                                type="number"
+                                className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
+                                value={row.qty}
+                                onChange={(e) => {
+                                  const qty = parseFloat(e.target.value) || 1
+                                  const u = [...pdfProducts]
+                                  u[idx] = {
+                                    ...u[idx],
+                                    qty,
+                                    amount_foreign: qty * u[idx].unit_price_foreign,
+                                  }
+                                  setPdfProducts(u)
+                                }}
+                              />
+                            </td>
+                            <td className="p-1">
+                              <input
+                                type="number"
+                                className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
+                                value={row.unit_price_foreign.toFixed(4)}
+                                onChange={(e) => {
+                                  const price = parseFloat(e.target.value) || 0
+                                  const u = [...pdfProducts]
+                                  u[idx] = {
+                                    ...u[idx],
+                                    unit_price_foreign: price,
+                                    amount_foreign: price * u[idx].qty,
+                                  }
+                                  setPdfProducts(u)
+                                }}
+                              />
                             </td>
                             <td className="p-2 text-right font-medium">
                               {sym}
-                              {formatPrice(r.priceForeign)}
+                              {row.amount_foreign.toFixed(2)}
                             </td>
-                            <td className="p-2 text-right text-gray-500">¥{r.priceCNY.toFixed(2)}</td>
+                            <td className="p-1 text-center">
+                              {pdfProducts.length > 1 && (
+                                <button
+                                  type="button"
+                                  className="text-red-400 hover:text-red-600"
+                                  onClick={() => setPdfProducts((prev) => prev.filter((_, i) => i !== idx))}
+                                >
+                                  ×
+                                </button>
+                              )}
+                            </td>
                           </tr>
-                        ))}
+                        )
+                      )}
                     </tbody>
+                    <tfoot className="bg-gray-50 border-t">
+                      <tr>
+                        <td colSpan={3} className="p-2 text-right text-xs font-bold text-gray-600">
+                          合计
+                        </td>
+                        <td className="p-2 text-right text-xs font-bold text-blue-700">
+                          {sym}
+                          {pdfProducts
+                            .filter((p) => !p.isContainerHeader)
+                            .reduce((s, p) => s + p.amount_foreign, 0)
+                            .toFixed(2)}
+                        </td>
+                        <td></td>
+                      </tr>
+                    </tfoot>
                   </table>
                 </div>
-              )}
-            </div>
+                <p className="text-xs text-gray-400">
+                  {quoteLayoutMode === 'container_group'
+                    ? '货柜标题行仅用于 PDF 分组与小计；产品行顺序仍与 ② 中成本表一致。填 ④ 物流时可将海运费等按柜或按票与你的分组对照。'
+                    : '与 ② 成本行按顺序对应；可添加额外明细行。保存/生成 PDF 时按后面「价格板块」选项重算单价。'}
+                </p>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -1873,193 +2063,6 @@ export default function QuotePage() {
                     </>
                   )}
                   </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent className="p-5 space-y-3">
-                  {stepTitle(6, 'PDF 明细行')}
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        与计算器产品行对齐；编辑区与出厂价 EXW 同步；保存/预览时按上方「价格板块」重算单价与合计。
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="inline-flex rounded-md border border-gray-200 bg-white p-0.5 text-xs">
-                        <button
-                          type="button"
-                          className={`rounded px-2 py-1 ${quoteLayoutMode === 'product_list' ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
-                          onClick={() => {
-                            setQuoteLayoutMode('product_list')
-                            setPdfProducts((prev) => prev.filter((r) => !r.isContainerHeader))
-                          }}
-                        >
-                          产品列表
-                        </button>
-                        <button
-                          type="button"
-                          className={`rounded px-2 py-1 ${quoteLayoutMode === 'container_group' ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
-                          onClick={() => {
-                            setQuoteLayoutMode('container_group')
-                            setPdfProducts((prev) => {
-                              if (prev.some((r) => r.isContainerHeader)) return prev
-                              return [emptyContainerHeaderRow(), ...prev]
-                            })
-                          }}
-                        >
-                          按货柜分组
-                        </button>
-                      </div>
-                      {quoteLayoutMode === 'container_group' && (
-                        <button
-                          type="button"
-                          className="text-xs text-amber-700 hover:underline"
-                          onClick={() => setPdfProducts((prev) => [...prev, emptyContainerHeaderRow()])}
-                        >
-                          + 货柜标题
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="text-xs text-blue-600 hover:underline"
-                        onClick={() => {
-                          const price = selectedTradeResult?.priceForeign || 0
-                          setPdfProducts((prev) => [...prev, emptyProductPdfRow(price)])
-                        }}
-                      >
-                        + 添加行
-                      </button>
-                    </div>
-                  </div>
-                  <div className="border rounded-lg overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="text-left p-2 font-medium text-gray-500">产品名称</th>
-                          <th className="text-right p-2 font-medium text-gray-500 w-16">数量</th>
-                          <th className="text-right p-2 font-medium text-gray-500 w-20">单价</th>
-                          <th className="text-right p-2 font-medium text-gray-500 w-20">小计</th>
-                          <th className="p-2 w-6"></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {pdfProducts.map((row, idx) =>
-                          row.isContainerHeader ? (
-                            <tr key={idx} className="border-t bg-amber-50/80">
-                              <td className="p-1" colSpan={4}>
-                                <input
-                                  className="w-full text-xs border border-amber-200 rounded px-1 py-0.5 focus:outline-blue-400 font-medium"
-                                  value={row.name}
-                                  onChange={(e) => {
-                                    const u = [...pdfProducts]
-                                    u[idx] = { ...u[idx], name: e.target.value }
-                                    setPdfProducts(u)
-                                  }}
-                                  placeholder="货柜 / 分组标题（如 1×40HQ）"
-                                />
-                              </td>
-                              <td className="p-1 text-center">
-                                {pdfProducts.length > 1 && (
-                                  <button
-                                    type="button"
-                                    className="text-red-400 hover:text-red-600"
-                                    onClick={() => setPdfProducts((prev) => prev.filter((_, i) => i !== idx))}
-                                  >
-                                    ×
-                                  </button>
-                                )}
-                              </td>
-                            </tr>
-                          ) : (
-                            <tr key={idx} className="border-t">
-                              <td className="p-1">
-                                <input
-                                  className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
-                                  value={row.name}
-                                  onChange={(e) => {
-                                    const u = [...pdfProducts]
-                                    u[idx] = { ...u[idx], name: e.target.value }
-                                    setPdfProducts(u)
-                                  }}
-                                  placeholder="产品名称"
-                                />
-                              </td>
-                              <td className="p-1">
-                                <input
-                                  type="number"
-                                  className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
-                                  value={row.qty}
-                                  onChange={(e) => {
-                                    const qty = parseFloat(e.target.value) || 1
-                                    const u = [...pdfProducts]
-                                    u[idx] = {
-                                      ...u[idx],
-                                      qty,
-                                      amount_foreign: qty * u[idx].unit_price_foreign,
-                                    }
-                                    setPdfProducts(u)
-                                  }}
-                                />
-                              </td>
-                              <td className="p-1">
-                                <input
-                                  type="number"
-                                  className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
-                                  value={row.unit_price_foreign.toFixed(4)}
-                                  onChange={(e) => {
-                                    const price = parseFloat(e.target.value) || 0
-                                    const u = [...pdfProducts]
-                                    u[idx] = {
-                                      ...u[idx],
-                                      unit_price_foreign: price,
-                                      amount_foreign: price * u[idx].qty,
-                                    }
-                                    setPdfProducts(u)
-                                  }}
-                                />
-                              </td>
-                              <td className="p-2 text-right font-medium">
-                                {sym}
-                                {row.amount_foreign.toFixed(2)}
-                              </td>
-                              <td className="p-1 text-center">
-                                {pdfProducts.length > 1 && (
-                                  <button
-                                    type="button"
-                                    className="text-red-400 hover:text-red-600"
-                                    onClick={() => setPdfProducts((prev) => prev.filter((_, i) => i !== idx))}
-                                  >
-                                    ×
-                                  </button>
-                                )}
-                              </td>
-                            </tr>
-                          )
-                        )}
-                      </tbody>
-                      <tfoot className="bg-gray-50 border-t">
-                        <tr>
-                          <td colSpan={3} className="p-2 text-right text-xs font-bold text-gray-600">
-                            合计
-                          </td>
-                          <td className="p-2 text-right text-xs font-bold text-blue-700">
-                            {sym}
-                            {pdfProducts
-                              .filter((p) => !p.isContainerHeader)
-                              .reduce((s, p) => s + p.amount_foreign, 0)
-                              .toFixed(2)}
-                          </td>
-                          <td></td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                  <p className="text-xs text-gray-400">
-                    {quoteLayoutMode === 'container_group'
-                      ? '货柜标题行仅用于 PDF 分组与小计；产品行仍与左侧成本计算器顺序对应。'
-                      : '与左侧成本行按顺序对应；可添加额外明细行（无对应成本时成本记为 0）。'}
-                  </p>
                 </CardContent>
               </Card>
 
