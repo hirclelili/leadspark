@@ -79,8 +79,33 @@ interface CalcProductRow {
   unit: string
   costPrice: string // 工厂价 ¥/单位
   quantity: string
-  /** 对外单价（目标货币/单位）；填写则按此行反推利润率，覆盖整单规则 */
-  quoteUnitForeign: string
+  /** 对客单价 ¥/单位；填写则按此行反推利润率，覆盖整单规则（与工厂价同币便于心算） */
+  quoteUnitCny: string
+}
+
+/** 旧版「对外单价(外币)」存盘时按当前汇率换算为对客单价(¥) */
+function migrateCalcProductRows(
+  rows: unknown[],
+  exchangeRate: number
+): CalcProductRow[] {
+  const er = exchangeRate > 0 ? exchangeRate : 0.14
+  return rows.map((raw) => {
+    const r = raw as CalcProductRow & { quoteUnitForeign?: string }
+    let quoteUnitCny = r.quoteUnitCny ?? ''
+    if (!String(quoteUnitCny).trim() && r.quoteUnitForeign) {
+      const f = parseFloat(r.quoteUnitForeign) || 0
+      if (f > 0 && er > 0) quoteUnitCny = String(f / er)
+    }
+    return {
+      id: r.id,
+      name: r.name,
+      model: r.model,
+      unit: r.unit,
+      costPrice: r.costPrice,
+      quantity: r.quantity,
+      quoteUnitCny,
+    }
+  })
 }
 
 interface MultiProductQuoteResult {
@@ -257,7 +282,7 @@ function calculateMultiProductQuote(
 }
 
 /**
- * 主路径：整单规则 → 初版；若某行填对外单价则该行覆盖利润规则（见 UI 说明）。
+ * 主路径：整单规则 → 初版；若某行填对客单价(¥)则该行覆盖利润规则（见 UI 说明）。
  * costPrice = 工厂 ¥/单位（可含整单固定加价分摊）；profitRate = 该行对 EXW 的有效利润率%
  */
 function buildCalcProductInputs(
@@ -265,15 +290,14 @@ function buildCalcProductInputs(
   pricingMode: PricingMode,
   profitRateStr: string,
   orderMarkupPercentStr: string,
-  orderMarkupFixedStr: string,
-  exchangeRate: number
+  orderMarkupFixedStr: string
 ): { id: string; costPrice: number; quantity: number; profitRate: number }[] | null {
   const raw = calcProducts
     .map((p) => ({
       id: p.id,
       unitCost: parseFloat(p.costPrice) || 0,
       qty: parseFloat(p.quantity) || 0,
-      quoteForeign: parseFloat(p.quoteUnitForeign) || 0,
+      quoteCny: parseFloat(p.quoteUnitCny) || 0,
     }))
     .filter((p) => p.unitCost > 0 && p.qty > 0)
 
@@ -298,9 +322,8 @@ function buildCalcProductInputs(
           ? parseFloat(orderMarkupPercentStr) || 0
           : parseFloat(profitRateStr) || 0
 
-    if (p.quoteForeign > 0 && exchangeRate > 0) {
-      const priceCNY = p.quoteForeign / exchangeRate
-      profitRate = (priceCNY / unitCost - 1) * 100
+    if (p.quoteCny > 0) {
+      profitRate = (p.quoteCny / unitCost - 1) * 100
     }
 
     return {
@@ -383,7 +406,7 @@ export default function QuotePage() {
 
   // ── Calculator inputs
   const [calcProducts, setCalcProducts] = useState<CalcProductRow[]>([
-    { id: crypto.randomUUID(), name: '', model: '', unit: 'pc', costPrice: '', quantity: '100', quoteUnitForeign: '' },
+    { id: crypto.randomUUID(), name: '', model: '', unit: 'pc', costPrice: '', quantity: '100', quoteUnitCny: '' },
   ])
   const [productPickerRowId, setProductPickerRowId] = useState<string | null>(null)
   const [formData, setFormData] = useState({
@@ -470,8 +493,7 @@ export default function QuotePage() {
       formData.pricingMode,
       formData.profitRate,
       formData.orderMarkupPercent,
-      formData.orderMarkupFixed,
-      exchangeRate
+      formData.orderMarkupFixed
     )
     if (!valid || valid.length === 0) return null
 
@@ -492,8 +514,7 @@ export default function QuotePage() {
       formData.pricingMode,
       formData.profitRate,
       formData.orderMarkupPercent,
-      formData.orderMarkupFixed,
-      exchangeRate
+      formData.orderMarkupFixed
     )
     if (!valid || valid.length === 0) return null
 
@@ -537,8 +558,7 @@ export default function QuotePage() {
         formData.pricingMode,
         formData.profitRate,
         formData.orderMarkupPercent,
-        formData.orderMarkupFixed,
-        exchangeRate
+        formData.orderMarkupFixed
       ),
     [
       calcProducts,
@@ -546,7 +566,6 @@ export default function QuotePage() {
       formData.profitRate,
       formData.orderMarkupPercent,
       formData.orderMarkupFixed,
-      exchangeRate,
     ]
   )
 
@@ -567,12 +586,7 @@ export default function QuotePage() {
       try {
         const draft = JSON.parse(draftJson)
         if (draft.calcProducts) {
-          setCalcProducts(
-            draft.calcProducts.map((r: CalcProductRow) => ({
-              ...r,
-              quoteUnitForeign: r.quoteUnitForeign ?? '',
-            }))
-          )
+          setCalcProducts(migrateCalcProductRows(draft.calcProducts, exchangeRate))
         }
         if (draft.formData) {
           setFormData((prev) => ({
@@ -619,13 +633,8 @@ export default function QuotePage() {
       const savedProducts = localStorage.getItem('leadspark_calc_products')
       if (savedProducts) {
         try {
-          const parsed = JSON.parse(savedProducts) as CalcProductRow[]
-          setCalcProducts(
-            parsed.map((r) => ({
-              ...r,
-              quoteUnitForeign: r.quoteUnitForeign ?? '',
-            }))
-          )
+          const parsed = JSON.parse(savedProducts) as unknown[]
+          setCalcProducts(migrateCalcProductRows(parsed, exchangeRate))
         } catch { /* ignore */ }
       }
     }
@@ -785,7 +794,7 @@ export default function QuotePage() {
         unit: 'pc',
         costPrice: '',
         quantity: '100',
-        quoteUnitForeign: '',
+        quoteUnitCny: '',
       },
     ])
   }
@@ -1487,7 +1496,7 @@ export default function QuotePage() {
               <p className="font-medium text-slate-800">主路径（全行业通用）</p>
               <ol className="list-decimal list-inside space-y-0.5 text-slate-600">
                 <li>先选下方「整单定价方式」，由系统按工厂价统一算出各行初版卖价。</li>
-                <li>某行需要谈死价或单独定价时，再填「对外单价」——该行以对外价为准，不再套用整单利润率/加价%，仅反推展示利润%。</li>
+                <li>某行需要谈死价或单独定价时，再填「对客单价(¥)」——与工厂价同币便于心算；约合目标货币见表内换算列。该行不再套用整单利润率/加价%，仅反推展示利润%。</li>
                 <li>整单额外费用（手续费等）建议做 PI 单独费用行，一般不再叠乘到已锁行价上。</li>
               </ol>
             </div>
@@ -1495,7 +1504,7 @@ export default function QuotePage() {
             <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50/50 p-4">
               <div>
                 <label className="text-sm font-medium">整单定价方式</label>
-                <p className="text-xs text-gray-500 mt-1">先定规则，再在产品表里出数；未填「对外单价」的行都走这里。</p>
+                <p className="text-xs text-gray-500 mt-1">先定规则，再在产品表里出数；未填「对客单价(¥)」的行都走这里。</p>
               </div>
               <Select
                 value={formData.pricingMode}
@@ -1558,14 +1567,14 @@ export default function QuotePage() {
               </div>
               <p className="text-xs text-gray-600 border-t border-gray-200 pt-3">
                 <span className="font-medium text-gray-700">行级例外：</span>
-                产品表中若填写「对外单价」，则该行卖价以对外价为准，整单利润率/加价规则不再作用于该行的利润计算（与整单固定加价分摊后的成本底对比后反推利润%）。
+                产品表中若填写「对客单价(¥)」，则该行以人民币卖价为准，整单利润率/加价规则不再作用于该行的利润计算（与整单固定加价分摊后的成本底对比后反推利润%）。目标货币单价由汇率换算展示，不参与反推公式。
               </p>
             </div>
 
             <div className="space-y-2">
               <label className="text-sm font-medium">产品列表</label>
               <div className="border rounded-lg overflow-x-auto">
-                <table className="w-full text-xs min-w-[720px]">
+                <table className="w-full text-xs min-w-[820px]">
                   <thead className="bg-gray-50 border-b">
                     <tr>
                       <th className="text-left p-2 font-medium text-gray-500 min-w-[100px]">名称</th>
@@ -1575,10 +1584,16 @@ export default function QuotePage() {
                       <th className="text-right p-2 font-medium text-gray-500 w-16">数量*</th>
                       <th className="text-right p-2 font-medium text-gray-500 w-20">小计¥</th>
                       <th
-                        className="text-right p-2 font-medium text-gray-500 w-[88px]"
-                        title="填则该行以该价为准，覆盖整单定价规则，仅反推利润%"
+                        className="text-right p-2 font-medium text-gray-500 w-24"
+                        title="人民币对客单价；填则覆盖整单规则，仅反推利润%"
                       >
-                        对外单价({sym})
+                        对客单价(¥)
+                      </th>
+                      <th
+                        className="text-right p-2 font-medium text-gray-500 w-24"
+                        title="由对客单价(¥)×汇率换算，仅作对照"
+                      >
+                        约合({sym})
                       </th>
                       <th className="text-right p-2 font-medium text-gray-500 w-14">利润%</th>
                       <th className="w-8 p-2"></th>
@@ -1590,6 +1605,13 @@ export default function QuotePage() {
                       const qty = parseFloat(row.quantity) || 0
                       const lineFactory = unit * qty
                       const mr = marginById.get(row.id)
+                      const quoteCny = parseFloat(row.quoteUnitCny) || 0
+                      const equivForeign =
+                        quoteCny > 0 && exchangeRate > 0
+                          ? formData.currency === 'CNY'
+                            ? quoteCny
+                            : quoteCny * exchangeRate
+                          : null
                       return (
                         <tr key={row.id} className="border-t">
                           <td className="p-1">
@@ -1652,10 +1674,24 @@ export default function QuotePage() {
                               type="number"
                               step="any"
                               className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
-                              value={row.quoteUnitForeign}
-                              onChange={(e) => updateCalcProduct(row.id, 'quoteUnitForeign', e.target.value)}
+                              value={row.quoteUnitCny}
+                              onChange={(e) => updateCalcProduct(row.id, 'quoteUnitCny', e.target.value)}
                               placeholder="可选"
                             />
+                          </td>
+                          <td className="p-1 text-right text-gray-500 tabular-nums text-[11px]">
+                            {equivForeign != null ? (
+                              formData.currency === 'CNY' ? (
+                                `¥${formatPrice(equivForeign)}`
+                              ) : (
+                                <>
+                                  {sym}
+                                  {formatPrice(equivForeign)}
+                                </>
+                              )
+                            ) : (
+                              '—'
+                            )}
                           </td>
                           <td className="p-1 text-right text-gray-600 tabular-nums">
                             {mr != null && unit > 0 && qty > 0 ? `${mr.toFixed(1)}%` : '—'}
@@ -1681,7 +1717,7 @@ export default function QuotePage() {
                       <td className="p-2 text-right text-xs tabular-nums">
                         {factoryCostTotalCNY > 0 ? factoryCostTotalCNY.toFixed(2) : '—'}
                       </td>
-                      <td colSpan={3} className="p-2 text-xs text-gray-500"></td>
+                      <td colSpan={4} className="p-2 text-xs text-gray-500"></td>
                     </tr>
                   </tbody>
                 </table>
