@@ -2360,7 +2360,7 @@ export default function QuotePage() {
 
               <Button className="w-full" size="lg" onClick={openQuoteDialog}>
                 <FileText className="mr-2 h-4 w-4" />
-                下一步：确认条款并生成 PDF
+                下一步：填写条款并导出
               </Button>
             </>
           )}
@@ -2397,9 +2397,9 @@ export default function QuotePage() {
       <Dialog open={quoteDialogOpen} onOpenChange={setQuoteDialogOpen}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{quoteStep === 1 ? '第一步：选择客户' : '第二步：报价单信息'}</DialogTitle>
+            <DialogTitle>{quoteStep === 1 ? '第一步：选择客户' : '第二步：填写条款'}</DialogTitle>
             <DialogDescription>
-              {quoteStep === 1 ? '搜索已有客户，或新建客户' : '填写报价单详情，完成后生成 PDF'}
+              {quoteStep === 1 ? '搜索已有客户，或新建客户' : '填写条款后选择导出为 Excel 或 PDF'}
             </DialogDescription>
           </DialogHeader>
 
@@ -2623,18 +2623,20 @@ export default function QuotePage() {
                 <Textarea value={quoteDetails.remarks} onChange={(e) => setQuoteDetails({ ...quoteDetails, remarks: e.target.value })} placeholder="其他说明..." rows={3} />
               </div>
 
-              <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={handlePreviewPDF} disabled={previewing || generating}>
+              <div className="space-y-2">
+                <div className="flex gap-2">
+                  <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => handleGeneratePDF('xlsx')} disabled={generating || previewing}>
+                    {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
+                    保存并下载 Excel
+                  </Button>
+                  <Button className="flex-1" onClick={() => handleGeneratePDF('pdf')} disabled={generating || previewing}>
+                    {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
+                    保存并下载 PDF
+                  </Button>
+                </div>
+                <Button variant="outline" className="w-full" onClick={handlePreviewPDF} disabled={previewing || generating}>
                   {previewing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
-                  预览
-                </Button>
-                <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => handleGeneratePDF('xlsx')} disabled={generating || previewing}>
-                  {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
-                  保存并下载 Excel
-                </Button>
-                <Button className="flex-1" onClick={() => handleGeneratePDF('pdf')} disabled={generating || previewing}>
-                  {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
-                  保存并下载 PDF
+                  预览 PDF
                 </Button>
               </div>
             </div>

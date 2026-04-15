@@ -103,34 +103,42 @@ export async function POST(request: Request) {
 
     const quotation_number = generateQuotationNumber()
 
-    const { data, error } = await supabase
+    const baseInsert = {
+      user_id: user.id,
+      customer_id,
+      quotation_number,
+      trade_term,
+      currency: currency || 'USD',
+      exchange_rate,
+      products,
+      costs,
+      total_amount_foreign,
+      total_amount_cny,
+      payment_terms,
+      delivery_time,
+      validity_days: validity_days || 30,
+      packing,
+      remarks,
+      document_kind: document_kind || 'PI',
+      reference_number: reference_number || null,
+      seller_visible_pl: seller_visible_pl !== false,
+      seller_visible_pi: seller_visible_pi !== false,
+      seller_visible_ci: seller_visible_ci !== false,
+      po_number: po_number?.trim() || null,
+      deposit_percent:
+        deposit_percent != null && deposit_percent !== ''
+          ? Number(deposit_percent)
+          : null,
+    }
+
+    // Try with all optional columns first; fall back to base if column missing
+    let data: Record<string, unknown> | null = null
+    let error: { message: string; code?: string } | null = null
+
+    ;({ data, error } = await supabase
       .from('quotations')
       .insert({
-        user_id: user.id,
-        customer_id,
-        quotation_number,
-        trade_term,
-        currency: currency || 'USD',
-        exchange_rate,
-        products,
-        costs,
-        total_amount_foreign,
-        total_amount_cny,
-        payment_terms,
-        delivery_time,
-        validity_days: validity_days || 30,
-        packing,
-        remarks,
-        document_kind: document_kind || 'PI',
-        reference_number: reference_number || null,
-        seller_visible_pl: seller_visible_pl !== false,
-        seller_visible_pi: seller_visible_pi !== false,
-        seller_visible_ci: seller_visible_ci !== false,
-        po_number: po_number?.trim() || null,
-        deposit_percent:
-          deposit_percent != null && deposit_percent !== ''
-            ? Number(deposit_percent)
-            : null,
+        ...baseInsert,
         quote_mode:
           quote_mode === 'container_group' || quote_mode === 'product_list'
             ? quote_mode
@@ -138,7 +146,16 @@ export async function POST(request: Request) {
         quote_snapshot: quote_snapshot ?? null,
       })
       .select()
-      .single()
+      .single())
+
+    // If column doesn't exist yet (migration not run), retry without optional columns
+    if (error && (error.code === '42703' || error.message?.includes('column'))) {
+      ;({ data, error } = await supabase
+        .from('quotations')
+        .insert(baseInsert)
+        .select()
+        .single())
+    }
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
