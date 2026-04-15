@@ -164,12 +164,15 @@ export function SettingsClient() {
 
       const data = await res.json()
       if (!res.ok || data.error) {
-        console.error('[Settings] Save failed:', data)
+        console.error('[Settings] Save failed:', res.status, data)
         toast.error('保存失败: ' + (data.error || `HTTP ${res.status}`))
       } else {
         console.log('[Settings] Saved profile:', data)
         setProfile(data)
-        await refreshProfile()   // sync to global context immediately
+        // Sync global context
+        await refreshProfile()
+        // Re-fetch from DB to confirm write succeeded (updates the status banner)
+        await fetchProfile()
         toast.success(`保存成功${data.company_name ? ' — ' + data.company_name : ''}`)
       }
     } catch (error) {
@@ -193,6 +196,21 @@ export function SettingsClient() {
       <div className="flex items-center gap-3 mb-6">
         <Settings className="w-6 h-6" />
         <h1 className="text-2xl font-bold">用户设置</h1>
+      </div>
+
+      {/* DB status indicator */}
+      <div className={`rounded-lg border px-4 py-3 text-sm flex items-start gap-3 ${profile?.company_name ? 'bg-green-50 border-green-200 text-green-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+        <span className="text-base mt-0.5">{profile?.company_name ? '✅' : '⚠️'}</span>
+        <div>
+          <div className="font-semibold">
+            {profile?.company_name
+              ? `数据库已有记录：${profile.company_name}${profile.company_name_cn ? ` / ${profile.company_name_cn}` : ''}`
+              : '数据库暂无公司信息，请填写后点击保存'}
+          </div>
+          {profile?.bank_name && (
+            <div className="text-xs mt-0.5 opacity-75">银行：{profile.bank_name}</div>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
