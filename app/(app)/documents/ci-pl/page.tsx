@@ -132,11 +132,20 @@ export default function CiPlPage() {
     tradeTerm: 'FOB', paymentTerms: '', currency: 'USD',
   })
   const [containers, setContainers] = useState<ContainerData[]>([newContainer()])
-  const { profile: userProfile } = useUserProfile()
+  const { profile: userProfile, refreshProfile } = useUserProfile()
   const [generating, setGenerating] = useState<string | null>(null)
   const [sharedExpanded, setSharedExpanded] = useState(true)
 
   const sym = getCurrencySymbol(shared.currency)
+
+  // Safety-net: if context profile is still null on mount (e.g. first visit
+  // before layout cached the row), trigger a client-side refresh.
+  useEffect(() => {
+    if (!userProfile) {
+      refreshProfile()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     // Profile comes from global context — no fetch needed here

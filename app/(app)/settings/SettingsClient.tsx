@@ -163,15 +163,17 @@ export function SettingsClient() {
       })
 
       const data = await res.json()
-      if (data.error) {
-        toast.error('保存失败: ' + data.error)
+      if (!res.ok || data.error) {
+        console.error('[Settings] Save failed:', data)
+        toast.error('保存失败: ' + (data.error || `HTTP ${res.status}`))
       } else {
+        console.log('[Settings] Saved profile:', data)
         setProfile(data)
         await refreshProfile()   // sync to global context immediately
-        toast.success('保存成功')
+        toast.success(`保存成功${data.company_name ? ' — ' + data.company_name : ''}`)
       }
     } catch (error) {
-      console.error('Save error:', error)
+      console.error('[Settings] Save error:', error)
       toast.error('保存失败')
     } finally {
       setSaving(false)

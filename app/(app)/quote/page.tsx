@@ -582,6 +582,13 @@ export default function QuotePage() {
   }, [calcInputsForDisplay])
 
   // ── Effects
+
+  // Safety-net: if context profile is null on mount, trigger a client refresh
+  useEffect(() => {
+    if (!userProfile) refreshProfile()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   useEffect(() => {
     fetchLibraryProducts()
     fetchExchangeRate()
