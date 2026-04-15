@@ -2520,6 +2520,20 @@ export default function QuotePage() {
                 <ArrowLeft className="w-4 h-4 mr-1" />返回选择客户
               </Button>
 
+              {/* Company info status */}
+              {userProfile?.company_name ? (
+                <div className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 text-xs text-blue-700 flex items-center gap-2">
+                  <span className="font-medium">{userProfile.company_name}</span>
+                  <span className="text-blue-400">·</span>
+                  <span>公司信息已加载，将自动填入单据抬头</span>
+                </div>
+              ) : (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700 flex items-center gap-2">
+                  <span>⚠️ 未检测到公司信息，导出的单据抬头将为空</span>
+                  <a href="/settings" target="_blank" className="underline font-medium ml-auto">去设置 →</a>
+                </div>
+              )}
+
               <div className="bg-gray-50 rounded-lg p-3 text-sm">
                 <span className="text-gray-500">客户：</span>
                 <span className="font-medium">{selectedCustomer?.company_name || newCustomerData.company_name}</span>

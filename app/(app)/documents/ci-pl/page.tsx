@@ -639,15 +639,19 @@ export default function CiPlPage() {
             每个货柜对应一套 CI + PL。上传工厂 PL 自动解析，补充价格后导出 Excel（可在 Excel/WPS 中编辑打印），或直接导出 PDF。
           </p>
         </div>
-        {userProfile && (
-          <div className="shrink-0 text-xs text-right text-slate-400 bg-slate-50 border rounded-md px-3 py-2">
-            <div className="font-medium text-slate-600 text-sm">{String(userProfile.company_name ?? '')}</div>
-            <div>公司信息已加载 · 将自动填入单据抬头</div>
-            {!userProfile.company_name && (
-              <a href="/settings" className="text-blue-500 underline">去设置公司信息</a>
-            )}
-          </div>
-        )}
+        <div className="shrink-0 text-xs text-right bg-slate-50 border rounded-md px-3 py-2">
+          {userProfile?.company_name ? (
+            <>
+              <div className="font-medium text-slate-700 text-sm">{userProfile.company_name}</div>
+              <div className="text-slate-400">公司信息已加载，将自动填入单据抬头</div>
+            </>
+          ) : (
+            <>
+              <div className="text-amber-600 font-medium">⚠️ 未检测到公司信息</div>
+              <a href="/settings" className="text-blue-500 underline">前往设置页填写公司名称和银行信息</a>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Shared info (collapsible) */}
