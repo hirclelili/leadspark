@@ -352,8 +352,13 @@ export default function CiPlPage() {
       const { CiPlPDF } = await import('@/components/pdf/CiPlPDF')
       for (let i = 0; i < valid.length; i++) {
         const c = valid[i]
+        const props = buildProps(c, mode)
+        // react-pdf can only load absolute http/https URLs for images; strip others
+        if (props.logoUrl && !/^https?:\/\//i.test(props.logoUrl)) {
+          props.logoUrl = undefined
+        }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const blob = await pdf(React.createElement(CiPlPDF, buildProps(c, mode) as any) as any).toBlob()
+        const blob = await pdf(React.createElement(CiPlPDF, props as any) as any).toBlob()
         const base = (c.containerNumber || `Container-${i + 1}`).replace(/[/\\?%*:|"<>]/g, '-')
         setTimeout(() => triggerDownload(blob, `${base}-${mode}.pdf`), i * 500)
       }
@@ -609,13 +614,13 @@ export default function CiPlPage() {
                       <td className="p-1"><Input className="text-xs" value={row.size} onChange={e => patchProduct(c.id, row.id, { size: e.target.value })} /></td>
                       <td className="p-1"><Input className="text-xs" value={row.material} onChange={e => patchProduct(c.id, row.id, { material: e.target.value })} /></td>
                       <td className="p-1"><Input className="text-xs" value={row.country_of_origin} onChange={e => patchProduct(c.id, row.id, { country_of_origin: e.target.value })} placeholder="CHINA" /></td>
-                      <td className="p-1"><Input type="number" className="text-right text-xs" value={row.qty} onChange={e => patchProduct(c.id, row.id, { qty: parseFloat(e.target.value) || 0 })} /></td>
+                      <td className="p-1"><Input type="number" min="0" className="text-right text-xs" value={row.qty} onChange={e => patchProduct(c.id, row.id, { qty: Math.max(0, parseFloat(e.target.value) || 0) })} /></td>
                       <td className="p-1"><Input className="text-xs" value={row.unit} onChange={e => patchProduct(c.id, row.id, { unit: e.target.value })} /></td>
-                      <td className="p-1"><Input type="number" className="text-right text-xs" value={row.no_of_packages || ''} onChange={e => patchProduct(c.id, row.id, { no_of_packages: parseFloat(e.target.value) || 0 })} /></td>
-                      <td className="p-1"><Input type="number" className="text-right text-xs" value={row.cbm || ''} onChange={e => patchProduct(c.id, row.id, { cbm: parseFloat(e.target.value) || 0 })} /></td>
-                      <td className="p-1"><Input type="number" className="text-right text-xs" value={row.nw || ''} onChange={e => patchProduct(c.id, row.id, { nw: parseFloat(e.target.value) || 0 })} /></td>
-                      <td className="p-1"><Input type="number" className="text-right text-xs" value={row.gw || ''} onChange={e => patchProduct(c.id, row.id, { gw: parseFloat(e.target.value) || 0 })} /></td>
-                      <td className="p-1"><Input type="number" className="text-right text-xs" value={row.unit_price_foreign || ''} onChange={e => patchProduct(c.id, row.id, { unit_price_foreign: parseFloat(e.target.value) || 0 })} /></td>
+                      <td className="p-1"><Input type="number" min="0" className="text-right text-xs" value={row.no_of_packages || ''} onChange={e => patchProduct(c.id, row.id, { no_of_packages: Math.max(0, parseFloat(e.target.value) || 0) })} /></td>
+                      <td className="p-1"><Input type="number" min="0" step="0.001" className="text-right text-xs" value={row.cbm || ''} onChange={e => patchProduct(c.id, row.id, { cbm: Math.max(0, parseFloat(e.target.value) || 0) })} /></td>
+                      <td className="p-1"><Input type="number" min="0" step="0.001" className="text-right text-xs" value={row.nw || ''} onChange={e => patchProduct(c.id, row.id, { nw: Math.max(0, parseFloat(e.target.value) || 0) })} /></td>
+                      <td className="p-1"><Input type="number" min="0" step="0.001" className="text-right text-xs" value={row.gw || ''} onChange={e => patchProduct(c.id, row.id, { gw: Math.max(0, parseFloat(e.target.value) || 0) })} /></td>
+                      <td className="p-1"><Input type="number" min="0" step="0.0001" className="text-right text-xs" value={row.unit_price_foreign || ''} onChange={e => patchProduct(c.id, row.id, { unit_price_foreign: Math.max(0, parseFloat(e.target.value) || 0) })} /></td>
                       <td className="p-2 text-right font-medium">{row.amount_foreign > 0 ? `${sym}${row.amount_foreign.toFixed(2)}` : ''}</td>
                       <td className="p-1 text-center">
                         {c.products.length > 1 && (
@@ -657,7 +662,7 @@ export default function CiPlPage() {
           ) : (
             <>
               <div className="text-amber-600 font-medium">⚠️ 未检测到公司信息</div>
-              <a href="/settings" className="text-blue-500 underline">前往设置页填写公司名称和银行信息</a>
+              <a href="/settings" className="text-blue-500 underline">前往「企业资料」填写公司名称和银行信息</a>
             </>
           )}
         </div>

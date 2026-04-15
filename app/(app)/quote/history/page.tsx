@@ -260,7 +260,7 @@ export default function QuoteHistoryPage() {
                           </span>
                         )}
                         <span className="text-xs text-gray-400">
-                          {new Date(q.created_at).toLocaleDateString('zh-CN')}
+                          {new Date(q.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
                         </span>
                       </div>
                       {/* Customer */}

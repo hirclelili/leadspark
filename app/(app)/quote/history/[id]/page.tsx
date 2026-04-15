@@ -118,13 +118,8 @@ export default function QuotationDetailPage() {
     setAiGenerating(true)
     setAiEmailResult(null)
     try {
-      // Fetch company name from profile
-      let companyName = ''
-      try {
-        const pr = await fetch('/api/user-profile')
-        const p = await pr.json()
-        companyName = p?.company_name || ''
-      } catch { /* ignore */ }
+      // Use company name from global context — no extra fetch needed
+      const companyName = userProfile?.company_name || ''
 
       const res = await fetch('/api/ai/generate-reply', {
         method: 'POST',
@@ -474,44 +469,43 @@ export default function QuotationDetailPage() {
           </Button>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => { setAiEmailResult(null); setAiPanelOpen(true); handleGenerateReply(quotation) }}>
-            <Sparkles className="mr-1.5 h-4 w-4 text-blue-500" />
-            AI 生成回复邮件
+          {/* Primary actions — always visible */}
+          <Button className="bg-emerald-600 hover:bg-emerald-700" size="sm" onClick={handleRedownloadExcel} disabled={downloadingExcel}>
+            {downloadingExcel ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <FileSpreadsheet className="mr-1.5 h-4 w-4" />}
+            下载 Excel
           </Button>
-          <Button variant="outline" size="sm" onClick={handleGenerateCiPl}>
+          <Button size="sm" onClick={handleGenerateCiPl}>
             <Ship className="mr-1.5 h-4 w-4" />
             生成 CI/PL
           </Button>
-          <Button variant="outline" onClick={handleDuplicate}>
-            <Copy className="mr-2 h-4 w-4" />
-            复用此报价
-          </Button>
-          {quotation.customers?.email && (
-            <Button variant="outline" onClick={handleSendEmail} disabled={sendingEmail}>
-              {sendingEmail ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="mr-2 h-4 w-4" />
+
+          {/* Secondary actions — collapsed into dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'flex items-center gap-1')}>
+              更多操作
+              <ChevronDown className="h-3.5 w-3.5" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem onClick={() => { setAiEmailResult(null); setAiPanelOpen(true); handleGenerateReply(quotation) }}>
+                <Sparkles className="mr-2 h-4 w-4 text-blue-500" />
+                AI 生成回复邮件
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleDuplicate}>
+                <Copy className="mr-2 h-4 w-4" />
+                复用此报价
+              </DropdownMenuItem>
+              {quotation.customers?.email && (
+                <DropdownMenuItem onClick={handleSendEmail} disabled={sendingEmail}>
+                  {sendingEmail ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+                  发送给客户
+                </DropdownMenuItem>
               )}
-              发送给客户
-            </Button>
-          )}
-          <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={handleRedownloadExcel} disabled={downloadingExcel}>
-            {downloadingExcel ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <FileSpreadsheet className="mr-2 h-4 w-4" />
-            )}
-            下载 Excel
-          </Button>
-          <Button variant="outline" onClick={handleRedownload} disabled={downloading}>
-            {downloading ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Download className="mr-2 h-4 w-4" />
-            )}
-            下载 PDF
-          </Button>
+              <DropdownMenuItem onClick={handleRedownload} disabled={downloading}>
+                {downloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                下载 PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -645,7 +639,7 @@ export default function QuotationDetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {quotation.products.map((p, i) => (
+                {(quotation.products ?? []).map((p, i) => (
                   <tr key={i} className="border-b last:border-0">
                     <td className="py-3 pr-4">
                       <div className="font-medium">{p.name}</div>

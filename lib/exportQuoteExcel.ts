@@ -309,7 +309,7 @@ export async function exportQuoteExcel(opts: QuoteExcelOptions): Promise<void> {
     ws.mergeCells(`A${r}:${lastC}${r}`)
     sc(ws.getCell(`A${r}`), { value: 'REMARKS:', bold: true, size: 8.5, bg: C.remarksBg, border: thin() })
     r++
-    ws.getRow(r).height = Math.max(13, Math.ceil(remarks.length / 80) * 13)
+    ws.getRow(r).height = Math.min(200, Math.max(13, Math.ceil(remarks.length / 80) * 13))
     ws.mergeCells(`A${r}:${lastC}${r}`)
     sc(ws.getCell(`A${r}`), { value: remarks, size: 8.5, bg: C.remarksBg, border: thin(), wrap: true })
     r++

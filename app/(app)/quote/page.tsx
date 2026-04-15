@@ -476,6 +476,7 @@ export default function QuotePage() {
   const [generatingPdf, setGeneratingPdf] = useState(false)
   const [generatingXlsx, setGeneratingXlsx] = useState(false)
   const [previewing, setPreviewing] = useState(false)
+  const [rateIsFallback, setRateIsFallback] = useState(false)
   // legacy alias kept so other references still compile
   const generating = generatingPdf || generatingXlsx
   const { profile: userProfile, refreshProfile } = useUserProfile()
@@ -768,6 +769,26 @@ export default function QuotePage() {
     } catch { /* ignore */ }
   }
 
+  const applyExchangeRate = (data: { rate?: number; updatedAt?: string }, currency: string) => {
+    if (data.rate && data.rate > 0) {
+      setExchangeRate(data.rate)
+      setRateUpdatedAt(data.updatedAt || '')
+      setRateIsFallback(false)
+    } else {
+      // Fallback: approximate rates — warn the user so they know to verify
+      const FALLBACK: Record<string, number> = {
+        USD: 0.138, EUR: 0.150, GBP: 0.176, JPY: 0.00094,
+        AUD: 0.091, CAD: 0.101, AED: 0.0376, SGD: 0.103,
+        HKD: 0.0176, CNY: 1,
+      }
+      const fallback = FALLBACK[currency] ?? 0.138
+      setExchangeRate(fallback)
+      setRateUpdatedAt('')
+      setRateIsFallback(true)
+      toast.warning(`汇率获取失败，已使用估算值（1 ${currency} ≈ ${(1 / fallback).toFixed(2)} CNY），请核实后调整`)
+    }
+  }
+
   const fetchExchangeRate = async () => {
     setRateLoading(true)
     try {
@@ -777,9 +798,8 @@ export default function QuotePage() {
         body: JSON.stringify({ targetCurrency: formData.currency }),
       })
       const data = await res.json()
-      setExchangeRate(data.rate || 0.14)
-      setRateUpdatedAt(data.updatedAt || '')
-    } catch { /* ignore */ } finally { setRateLoading(false) }
+      applyExchangeRate(data, formData.currency)
+    } catch { applyExchangeRate({}, formData.currency) } finally { setRateLoading(false) }
   }
 
   const handleCurrencyChange = async (currency: string) => {
@@ -792,9 +812,8 @@ export default function QuotePage() {
         body: JSON.stringify({ targetCurrency: currency }),
       })
       const data = await res.json()
-      setExchangeRate(data.rate || 0.14)
-      setRateUpdatedAt(data.updatedAt || '')
-    } catch { /* ignore */ } finally { setRateLoading(false) }
+      applyExchangeRate(data, currency)
+    } catch { applyExchangeRate({}, currency) } finally { setRateLoading(false) }
   }
 
   const addCalcProduct = () => {
@@ -1796,7 +1815,12 @@ export default function QuotePage() {
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-gray-400">更新于 {formatTime(rateUpdatedAt)}</span>
+                    {rateIsFallback
+                      ? <span className="text-xs text-amber-500 font-medium">⚠ 估算值，请核实</span>
+                      : rateUpdatedAt
+                        ? <span className="text-xs text-gray-400">更新于 {formatTime(rateUpdatedAt)}</span>
+                        : null
+                    }
                     <Button variant="ghost" size="sm" onClick={fetchExchangeRate} disabled={rateLoading}>
                       <RefreshCw className={`w-4 h-4 ${rateLoading ? 'animate-spin' : ''}`} />
                     </Button>
