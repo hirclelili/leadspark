@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Settings, Building, Upload, Loader2, Check, CreditCard } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { useUserProfile } from '@/contexts/UserProfileContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -58,6 +59,7 @@ const paymentTermsOptions = [
 ]
 
 export function SettingsClient() {
+  const { refreshProfile } = useUserProfile()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -165,6 +167,7 @@ export function SettingsClient() {
         toast.error('保存失败: ' + data.error)
       } else {
         setProfile(data)
+        await refreshProfile()   // sync to global context immediately
         toast.success('保存成功')
       }
     } catch (error) {

@@ -28,6 +28,7 @@ import {
 import { CURRENCY_OPTIONS, getCurrencySymbol } from '@/lib/currencies'
 import type { ParsedPackingRow } from '@/lib/packingExcelParse'
 import { exportCiPlExcel } from '@/lib/exportCiPlExcel'
+import { useUserProfile } from '@/contexts/UserProfileContext'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -131,16 +132,14 @@ export default function CiPlPage() {
     tradeTerm: 'FOB', paymentTerms: '', currency: 'USD',
   })
   const [containers, setContainers] = useState<ContainerData[]>([newContainer()])
-  const [userProfile, setUserProfile] = useState<Record<string, unknown> | null>(null)
+  const { profile: userProfile } = useUserProfile()
   const [generating, setGenerating] = useState<string | null>(null)
   const [sharedExpanded, setSharedExpanded] = useState(true)
 
   const sym = getCurrencySymbol(shared.currency)
 
   useEffect(() => {
-    fetch('/api/user-profile').then(r => r.json()).then(p => {
-      if (!p?.error) setUserProfile(p)
-    }).catch(() => {})
+    // Profile comes from global context — no fetch needed here
 
     // Pre-fill from order detail page (生成 CI/PL)
     try {

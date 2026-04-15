@@ -22,6 +22,7 @@ import { toast } from 'sonner'
 import type { DocumentKind, QuoteLayoutMode } from '@/components/pdf/QuotationPDF'
 import { AiSidePanel } from '@/components/AiSidePanel'
 import { exportQuoteExcel } from '@/lib/exportQuoteExcel'
+import { useUserProfile } from '@/contexts/UserProfileContext'
 
 const STATUS_CONFIG = {
   draft:       { label: '草稿',   color: 'bg-gray-100 text-gray-600' },
@@ -102,6 +103,7 @@ export default function QuotationDetailPage() {
 
   const [quotation, setQuotation] = useState<QuotationDetail | null>(null)
   const [loading, setLoading] = useState(true)
+  const { profile: userProfile } = useUserProfile()
   const [downloading, setDownloading] = useState(false)
   const [downloadingExcel, setDownloadingExcel] = useState(false)
   const [updatingStatus, setUpdatingStatus] = useState(false)
@@ -316,8 +318,7 @@ export default function QuotationDetailPage() {
     if (!quotation) return
     setDownloadingExcel(true)
     try {
-      const profileRes = await fetch('/api/user-profile')
-      const profile = profileRes.ok ? await profileRes.json() : null
+      const profile = userProfile
       const docKind = (quotation.document_kind === 'PI' ? 'PI' : 'QUOTATION') as 'PI' | 'QUOTATION'
       const displayNo = (quotation.reference_number?.trim()) || quotation.quotation_number
       await exportQuoteExcel({
@@ -369,9 +370,7 @@ export default function QuotationDetailPage() {
     if (!quotation) return
     setDownloading(true)
     try {
-      // Fetch user profile for company info
-      const profileRes = await fetch('/api/user-profile')
-      const profile = profileRes.ok ? await profileRes.json() : null
+      const profile = userProfile
 
       const { pdf } = await import('@react-pdf/renderer')
       const { QuotationPDF } = await import('@/components/pdf/QuotationPDF')

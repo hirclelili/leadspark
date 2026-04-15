@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/dialog'
 import { CURRENCY_OPTIONS, getCurrencySymbol } from '@/lib/currencies'
 import { exportQuoteExcel } from '@/lib/exportQuoteExcel'
+import { useUserProfile } from '@/contexts/UserProfileContext'
 
 const TRADE_TERMS = [
   { code: 'EXW', name: 'EXW', desc: '工厂交货' },
@@ -477,7 +478,8 @@ export default function QuotePage() {
   const [previewing, setPreviewing] = useState(false)
   // legacy alias kept so other references still compile
   const generating = generatingPdf || generatingXlsx
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
+  const { profile: userProfile, refreshProfile } = useUserProfile()
+  // local setter no longer needed — context is the source of truth
   const [pdfProducts, setPdfProducts] = useState<PDFProductRow[]>([])
   const [quoteLayoutMode, setQuoteLayoutMode] = useState<QuoteLayoutMode>('product_list')
   /** 上一档「计算器有效行数」，用于 product_list 下正确切分「对齐行 / 手动追加行」，避免减少计算器行数时旧行被误并入 tail。 */
@@ -843,18 +845,16 @@ export default function QuotePage() {
     setCustomerResults([])
 
     try {
-      const res = await fetch('/api/user-profile')
-      const profile = await res.json()
-      if (profile && !profile.error) {
-        setUserProfile(profile)
+      // Use profile from context (already loaded by server layout)
+      if (userProfile) {
         setQuoteDetails((prev) => ({
           ...prev,
           tradeTerm: OUTPUT_TRADE_TERM,
-          paymentTerms: profile.default_payment_terms || prev.paymentTerms,
-          validityDays: profile.default_validity || prev.validityDays,
+          paymentTerms: userProfile.default_payment_terms || prev.paymentTerms,
+          validityDays: userProfile.default_validity || prev.validityDays,
         }))
-        if (profile.default_currency) {
-          await handleCurrencyChange(profile.default_currency)
+        if (userProfile.default_currency) {
+          await handleCurrencyChange(userProfile.default_currency)
         }
       }
     } catch { /* use defaults */ }
@@ -953,13 +953,8 @@ export default function QuotePage() {
     if (format === 'xlsx') setGeneratingXlsx(true)
     else setGeneratingPdf(true)
     try {
-      // Always fetch fresh profile so settings changes are picked up immediately
-      let liveProfile: UserProfile | null = userProfile
-      try {
-        const pr = await fetch('/api/user-profile')
-        const p = await pr.json()
-        if (p && !p.error) { liveProfile = p; setUserProfile(p) }
-      } catch { /* keep cached */ }
+      // Profile comes from global context (populated by server on every navigation)
+      const liveProfile = userProfile
 
       let customerId = selectedCustomer?.id
       let customerName = selectedCustomer?.company_name || ''
