@@ -1092,7 +1092,7 @@ export default function QuotePage() {
         phone: userProfile?.phone,
         email: userProfile?.email,
         website: userProfile?.website,
-        logoUrl: userProfile?.logo_url,
+        logoUrl: userProfile?.logo_url && /^https?:\/\//i.test(userProfile.logo_url) ? userProfile.logo_url : undefined,
         bankName: userProfile?.bank_name,
         bankAccount: userProfile?.bank_account,
         bankSwift: userProfile?.bank_swift,
@@ -1227,7 +1227,7 @@ export default function QuotePage() {
         phone: userProfile?.phone,
         email: userProfile?.email,
         website: userProfile?.website,
-        logoUrl: userProfile?.logo_url,
+        logoUrl: userProfile?.logo_url && /^https?:\/\//i.test(userProfile.logo_url) ? userProfile.logo_url : undefined,
         bankName: userProfile?.bank_name,
         bankAccount: userProfile?.bank_account,
         bankSwift: userProfile?.bank_swift,
@@ -1370,17 +1370,40 @@ export default function QuotePage() {
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <Calculator className="w-6 h-6 shrink-0" />
-          <div className="min-w-0">
-            <h1 className="text-2xl font-bold">报价</h1>
-            <p className="text-xs text-gray-500 mt-0.5 hidden sm:block">
-              整单定价 → 产品行（可填对外价覆盖）→ EXW → PDF/货柜 → 物流 → 输出
-            </p>
-          </div>
+          <h1 className="text-2xl font-bold">新建报价</h1>
         </div>
         <Button variant="outline" size="sm" onClick={() => setAiPanelOpen(true)} className="shrink-0">
           <Sparkles className="mr-1.5 h-4 w-4 text-blue-500" />
           AI 解析询盘
         </Button>
+      </div>
+
+      {/* 单据类型选择 — 放最前面，决定输出目标 */}
+      <div className="flex items-center gap-3">
+        <span className="text-sm font-medium text-gray-700">单据类型：</span>
+        <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+          {(['QUOTATION', 'PI'] as const).map((kind) => {
+            const labels = { QUOTATION: 'Quotation（报价单）', PI: 'PI（形式发票）' }
+            const active = quoteDetails.documentKind === kind
+            return (
+              <button
+                key={kind}
+                type="button"
+                onClick={() => setQuoteDetails({ ...quoteDetails, documentKind: kind })}
+                className={`px-4 py-2 transition-colors font-medium ${
+                  active
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                {labels[kind]}
+              </button>
+            )
+          })}
+        </div>
+        <span className="text-xs text-gray-400">
+          {quoteDetails.documentKind === 'QUOTATION' ? '用于初次报价，告知客户价格' : '用于确认订单，客户据此付款'}
+        </span>
       </div>
 
       {/* ① 客户（可选） */}
@@ -2221,29 +2244,20 @@ export default function QuotePage() {
                 <CardContent className="p-5 space-y-4">
                   {stepTitle(5, '输出单证与价格板块')}
                   <p className="text-xs text-gray-500">
-                    先选要出的单据类型（Quotation / PI 等），再选价格板块（出厂 / 物流 / 双板块）。生成前可在下一步填写付款与交货条件。
+                    选择价格板块（出厂价 / 物流术语价 / 双板块），并确认贸易术语后下载 PDF。
                   </p>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">单据类型</label>
-                    <Select
-                      value={quoteDetails.documentKind}
-                      onValueChange={(v) =>
-                        setQuoteDetails({
-                          ...quoteDetails,
-                          documentKind: (v || quoteDetails.documentKind) as 'QUOTATION' | 'PL' | 'PI' | 'CI',
-                        })
-                      }
+                  <div className="flex items-center gap-2 text-sm px-3 py-2 bg-gray-50 rounded-lg">
+                    <span className="text-gray-500">当前单据类型：</span>
+                    <span className="font-semibold text-blue-700">
+                      {quoteDetails.documentKind === 'QUOTATION' ? 'Quotation（报价单）' : 'PI（形式发票）'}
+                    </span>
+                    <button
+                      type="button"
+                      className="ml-auto text-xs text-blue-600 underline"
+                      onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
                     >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="QUOTATION">Quotation（报价单）</SelectItem>
-                        <SelectItem value="PI">Proforma Invoice（PI）</SelectItem>
-                        <SelectItem value="PL">Packing List（PL）</SelectItem>
-                        <SelectItem value="CI">Commercial Invoice（CI）</SelectItem>
-                      </SelectContent>
-                    </Select>
+                      在顶部修改
+                    </button>
                   </div>
                   <div className="border-t pt-3 space-y-2">
                     <h3 className="font-semibold text-sm text-gray-800">价格板块（用于 PDF 行价与摘要）</h3>
@@ -2506,15 +2520,11 @@ export default function QuotePage() {
                 )}
               </div>
 
-              <p className="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 border border-gray-100">
+              <p className="text-xs text-gray-600 bg-blue-50 rounded-lg px-3 py-2 border border-blue-100">
                 单据类型：
-                <span className="font-medium text-gray-900">
-                  {quoteDetails.documentKind === 'QUOTATION' && 'Quotation（报价单）'}
-                  {quoteDetails.documentKind === 'PI' && 'Proforma Invoice（PI）'}
-                  {quoteDetails.documentKind === 'PL' && 'Packing List（PL）'}
-                  {quoteDetails.documentKind === 'CI' && 'Commercial Invoice（CI）'}
+                <span className="font-semibold text-blue-700 ml-1">
+                  {quoteDetails.documentKind === 'QUOTATION' ? 'Quotation（报价单）' : 'PI（形式发票）'}
                 </span>
-                <span className="text-gray-500"> — 在主页面「⑤ 输出单证与价格板块」中修改。</span>
               </p>
 
               {quoteDetails.documentKind === 'PI' && (
@@ -2558,31 +2568,15 @@ export default function QuotePage() {
                 />
               </div>
 
-              {quoteDetails.documentKind === 'PL' && (
-                <label className="flex items-center gap-2 text-sm cursor-pointer">
-                  <input
-                    type="checkbox"
-                    className="rounded border-gray-300"
-                    checked={quoteDetails.sellerVisiblePl}
-                    onChange={(e) => setQuoteDetails({ ...quoteDetails, sellerVisiblePl: e.target.checked })}
-                  />
-                  PL 上显示我司名称与抬头
-                </label>
-              )}
-              {(quoteDetails.documentKind === 'PI' ||
-                quoteDetails.documentKind === 'QUOTATION') && (
-                <label className="flex items-center gap-2 text-sm cursor-pointer">
-                  <input
-                    type="checkbox"
-                    className="rounded border-gray-300"
-                    checked={quoteDetails.sellerVisiblePi}
-                    onChange={(e) => setQuoteDetails({ ...quoteDetails, sellerVisiblePi: e.target.checked })}
-                  />
-                  {quoteDetails.documentKind === 'QUOTATION'
-                    ? 'Quotation 上显示我司名称与抬头'
-                    : 'PI 上显示我司名称与抬头'}
-                </label>
-              )}
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="rounded border-gray-300"
+                  checked={quoteDetails.sellerVisiblePi}
+                  onChange={(e) => setQuoteDetails({ ...quoteDetails, sellerVisiblePi: e.target.checked })}
+                />
+                PDF 上显示我司名称与抬头
+              </label>
               {quoteDetails.documentKind === 'CI' && (
                 <label className="flex items-center gap-2 text-sm cursor-pointer">
                   <input

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { FileText, ChevronLeft, ChevronRight, ChevronRight as ArrowRight, Search, Ship, X } from 'lucide-react'
+import { FileText, ChevronLeft, ChevronRight, Search, X, ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
@@ -162,25 +162,17 @@ export default function QuoteHistoryPage() {
 
   return (
     <div className="p-8 pt-16 md:pt-8 space-y-6">
-      <div className="flex items-center gap-3">
-        <FileText className="w-6 h-6" />
-        <h1 className="text-2xl font-bold">报价历史</h1>
-        <span className="text-gray-400 text-sm">共 {total} 条</span>
-      </div>
-
-      <div className="rounded-lg border border-blue-100 bg-blue-50/80 px-4 py-3 text-sm text-blue-900 flex flex-wrap items-start gap-3">
-        <Ship className="w-5 h-5 shrink-0 mt-0.5 text-blue-600" />
-        <div className="min-w-0 flex-1 space-y-1">
-          <p className="font-medium">报关 / 装箱单（Commercial Invoice & Packing List）</p>
-          <p className="text-blue-800/90 text-xs leading-relaxed">
-            若需按工厂装箱单或单独编辑 CI、PL 草稿，请使用 CI/PL 专页；与当次报价 PDF 并行，互不覆盖。
-          </p>
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <FileText className="w-6 h-6" />
+          <h1 className="text-2xl font-bold">订单跟进</h1>
+          <span className="text-gray-400 text-sm">共 {total} 条</span>
         </div>
         <Link
-          href="/documents/ci-pl"
-          className="inline-flex shrink-0 items-center justify-center rounded-md border border-blue-200 bg-white px-3 py-1.5 text-sm font-medium hover:bg-blue-50"
+          href="/quote"
+          className="inline-flex items-center justify-center rounded-md bg-blue-600 text-white px-4 py-2 text-sm font-medium hover:bg-blue-700"
         >
-          打开 CI / PL
+          + 新建报价
         </Link>
       </div>
 

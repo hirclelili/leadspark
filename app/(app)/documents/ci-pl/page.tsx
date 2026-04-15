@@ -12,6 +12,7 @@ import {
   ChevronUp,
   Settings2,
   Package,
+  FileSpreadsheet,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -26,6 +27,7 @@ import {
 } from '@/components/ui/select'
 import { CURRENCY_OPTIONS, getCurrencySymbol } from '@/lib/currencies'
 import type { ParsedPackingRow } from '@/lib/packingExcelParse'
+import { exportCiPlExcel } from '@/lib/exportCiPlExcel'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -139,6 +141,49 @@ export default function CiPlPage() {
     fetch('/api/user-profile').then(r => r.json()).then(p => {
       if (!p?.error) setUserProfile(p)
     }).catch(() => {})
+
+    // Pre-fill from order detail page (生成 CI/PL)
+    try {
+      const raw = localStorage.getItem('leadspark_cipl_prefill')
+      if (raw) {
+        localStorage.removeItem('leadspark_cipl_prefill')
+        const prefill = JSON.parse(raw) as {
+          customerName?: string
+          customerContact?: string
+          currency?: string
+          tradeTerm?: string
+          paymentTerms?: string
+          piNumber?: string
+          products?: Array<{
+            name: string; model?: string; qty: number; unit: string
+            unit_price_foreign?: number; amount_foreign?: number
+          }>
+        }
+        setShared(prev => ({
+          ...prev,
+          customerName: prefill.customerName || prev.customerName,
+          customerContact: prefill.customerContact || prev.customerContact,
+          currency: prefill.currency || prev.currency,
+          tradeTerm: prefill.tradeTerm || prev.tradeTerm,
+          paymentTerms: prefill.paymentTerms || prev.paymentTerms,
+        }))
+        if (prefill.products && prefill.products.length > 0) {
+          const lines: CiPlLine[] = prefill.products.map(p => ({
+            id: crypto.randomUUID(),
+            name: p.name,
+            model: p.model || '',
+            hs_code: '', size: '', material: '', country_of_origin: '',
+            qty: p.qty,
+            unit: p.unit || 'pc',
+            no_of_packages: 0, cbm: 0, nw: 0, gw: 0,
+            unit_price_foreign: p.unit_price_foreign || 0,
+            amount_foreign: p.amount_foreign || 0,
+          }))
+          setContainers([{ ...newContainer(), products: lines }])
+        }
+        toast.success(`已从 ${prefill.piNumber || 'PI'} 导入数据`)
+      }
+    } catch { /* ignore */ }
   }, [])
 
   // ─── Updaters ────────────────────────────────────────────────────────────
@@ -270,13 +315,19 @@ export default function CiPlPage() {
     try {
       const { pdf } = await import('@react-pdf/renderer')
       const { CiPlPDF } = await import('@/components/pdf/CiPlPDF')
+      const props = buildProps(c, mode)
+      // react-pdf can only load absolute http/https URLs for images; strip others
+      if (props.logoUrl && !/^https?:\/\//i.test(props.logoUrl)) {
+        props.logoUrl = undefined
+      }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const blob = await pdf(React.createElement(CiPlPDF, buildProps(c, mode) as any) as any).toBlob()
+      const blob = await pdf(React.createElement(CiPlPDF, props as any) as any).toBlob()
       const base = (c.containerNumber || `Container`).replace(/[/\\?%*:|"<>]/g, '-')
       triggerDownload(blob, `${base}-${mode}.pdf`)
-      toast.success(`已生成 ${mode}`)
+      toast.success(`已生成 ${mode} PDF`)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : '生成失败')
+      console.error('PDF generation error:', err)
+      toast.error(err instanceof Error ? err.message : '生成失败，请检查控制台')
     } finally { setGenerating(null) }
   }
 
@@ -301,6 +352,41 @@ export default function CiPlPage() {
       toast.success(`已生成 ${valid.length} 个 ${mode}`)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '生成失败')
+      console.error('PDF generation error:', err)
+    } finally { setGenerating(null) }
+  }
+
+  // ─── Excel export ─────────────────────────────────────────────────────────
+
+  const exportExcel = async (c: ContainerData, mode: 'CI' | 'PL') => {
+    const rows = c.products.filter(p => p.name.trim())
+    if (rows.length === 0) { toast.error('请先添加产品行'); return }
+    const key = c.id + 'XL' + mode
+    setGenerating(key)
+    try {
+      await exportCiPlExcel({
+        ...buildProps(c, mode),
+        products: rows.map(p => ({
+          name: p.name,
+          model: p.model || undefined,
+          hs_code: p.hs_code || undefined,
+          size: p.size || undefined,
+          material: p.material || undefined,
+          country_of_origin: p.country_of_origin || undefined,
+          qty: p.qty,
+          unit: p.unit,
+          no_of_packages: p.no_of_packages || undefined,
+          cbm: p.cbm || undefined,
+          nw: p.nw || undefined,
+          gw: p.gw || undefined,
+          unit_price_foreign: p.unit_price_foreign,
+          amount_foreign: p.amount_foreign,
+        })),
+      })
+      toast.success(`已导出 ${mode} Excel`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '导出失败')
+      console.error('Excel export error:', err)
     } finally { setGenerating(null) }
   }
 
@@ -309,8 +395,10 @@ export default function CiPlPage() {
   const renderContainer = (c: ContainerData, idx: number) => {
     const itemCount = c.products.filter(p => p.name.trim()).length
     const total = c.products.reduce((s, p) => s + p.amount_foreign, 0)
-    const ciKey = c.id + 'CI'
-    const plKey = c.id + 'PL'
+    const ciKey    = c.id + 'CI'
+    const plKey    = c.id + 'PL'
+    const xlCiKey  = c.id + 'XLCI'
+    const xlPlKey  = c.id + 'XLPL'
 
     return (
       <Card key={c.id} className="overflow-hidden border-slate-200">
@@ -342,23 +430,45 @@ export default function CiPlPage() {
               {itemCount} 项{total > 0 ? ` · ${sym}${total.toFixed(2)}` : ''}
             </span>
           )}
+          {/* Excel export (primary) */}
+          <Button
+            size="sm" variant="default"
+            className="h-7 px-2.5 text-xs shrink-0 bg-emerald-600 hover:bg-emerald-700"
+            onClick={() => exportExcel(c, 'CI')}
+            disabled={!!generating}
+          >
+            {generating === xlCiKey ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <FileSpreadsheet className="w-3 h-3 mr-1" />}
+            CI
+          </Button>
+          <Button
+            size="sm" variant="default"
+            className="h-7 px-2.5 text-xs shrink-0 bg-emerald-600 hover:bg-emerald-700"
+            onClick={() => exportExcel(c, 'PL')}
+            disabled={!!generating}
+          >
+            {generating === xlPlKey ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <FileSpreadsheet className="w-3 h-3 mr-1" />}
+            PL
+          </Button>
+          {/* PDF export (secondary) */}
           <Button
             size="sm" variant="outline"
             className="h-7 px-2.5 text-xs shrink-0"
             onClick={() => downloadOne(c, 'CI')}
             disabled={!!generating}
+            title="生成 CI PDF"
           >
             {generating === ciKey ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <FileDown className="w-3 h-3 mr-1" />}
-            CI
+            CI PDF
           </Button>
           <Button
             size="sm" variant="outline"
             className="h-7 px-2.5 text-xs shrink-0"
             onClick={() => downloadOne(c, 'PL')}
             disabled={!!generating}
+            title="生成 PL PDF"
           >
             {generating === plKey ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <FileDown className="w-3 h-3 mr-1" />}
-            PL
+            PL PDF
           </Button>
           <button
             type="button"
@@ -520,14 +630,25 @@ export default function CiPlPage() {
   return (
     <div className="p-6 space-y-6 max-w-6xl">
       {/* Page header */}
-      <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Ship className="w-7 h-7 text-blue-600" />
-          CI / PL 生成
-        </h1>
-        <p className="text-sm text-gray-500 mt-1">
-          每个货柜对应一套 CI + PL。填写共用信息，上传各货柜的工厂 PL，按货柜下载或批量下载。
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <Ship className="w-7 h-7 text-blue-600" />
+            CI / PL 生成
+          </h1>
+          <p className="text-sm text-gray-500 mt-1">
+            每个货柜对应一套 CI + PL。上传工厂 PL 自动解析，补充价格后导出 Excel（可在 Excel/WPS 中编辑打印），或直接导出 PDF。
+          </p>
+        </div>
+        {userProfile && (
+          <div className="shrink-0 text-xs text-right text-slate-400 bg-slate-50 border rounded-md px-3 py-2">
+            <div className="font-medium text-slate-600 text-sm">{String(userProfile.company_name ?? '')}</div>
+            <div>公司信息已加载 · 将自动填入单据抬头</div>
+            {!userProfile.company_name && (
+              <a href="/settings" className="text-blue-500 underline">去设置公司信息</a>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Shared info (collapsible) */}
@@ -617,17 +738,47 @@ export default function CiPlPage() {
         <div className="flex-1" />
         {containers.length > 1 && (
           <>
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-700"
+              disabled={!!generating}
+              onClick={async () => {
+                setGenerating('allXLPL')
+                for (const c of containers) {
+                  if (c.products.some(p => p.name.trim())) await exportCiPlExcel({ ...buildProps(c, 'PL'), products: c.products.filter(p => p.name.trim()) })
+                }
+                setGenerating(null)
+                toast.success(`已导出 ${containers.length} 个 PL Excel`)
+              }}
+            >
+              {generating === 'allXLPL' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <FileSpreadsheet className="w-4 h-4 mr-2" />}
+              批量导出全部 PL Excel ({containers.length})
+            </Button>
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-700"
+              disabled={!!generating}
+              onClick={async () => {
+                setGenerating('allXLCI')
+                for (const c of containers) {
+                  if (c.products.some(p => p.name.trim())) await exportCiPlExcel({ ...buildProps(c, 'CI'), products: c.products.filter(p => p.name.trim()) })
+                }
+                setGenerating(null)
+                toast.success(`已导出 ${containers.length} 个 CI Excel`)
+              }}
+            >
+              {generating === 'allXLCI' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <FileSpreadsheet className="w-4 h-4 mr-2" />}
+              批量导出全部 CI Excel ({containers.length})
+            </Button>
             <Button variant="outline" onClick={() => downloadAll('PL')} disabled={!!generating}>
               {generating === 'allPL'
                 ? <Loader2 className="w-4 h-4 animate-spin mr-2" />
                 : <FileDown className="w-4 h-4 mr-2" />}
-              批量下载全部 PL ({containers.length})
+              批量 PL PDF
             </Button>
-            <Button onClick={() => downloadAll('CI')} disabled={!!generating}>
+            <Button variant="outline" onClick={() => downloadAll('CI')} disabled={!!generating}>
               {generating === 'allCI'
                 ? <Loader2 className="w-4 h-4 animate-spin mr-2" />
                 : <FileDown className="w-4 h-4 mr-2" />}
-              批量下载全部 CI ({containers.length})
+              批量 CI PDF
             </Button>
           </>
         )}

@@ -5,7 +5,7 @@ import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Download, Building, Loader2, FileText,
-  CreditCard, Package, Truck, Hash, Copy, ChevronDown, Send, Sparkles, ClipboardCopy
+  CreditCard, Package, Truck, Hash, Copy, ChevronDown, Send, Sparkles, ClipboardCopy, Ship
 } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -201,6 +201,30 @@ export default function QuotationDetailPage() {
     }
   }
 
+  const handleGenerateCiPl = () => {
+    if (!quotation) return
+    const prefill = {
+      customerName: quotation.customers?.company_name || '',
+      customerContact: quotation.customers?.contact_name || '',
+      currency: quotation.currency,
+      tradeTerm: quotation.trade_term,
+      paymentTerms: quotation.payment_terms || '',
+      piNumber: quotation.quotation_number,
+      products: quotation.products
+        .filter((p) => !p.is_container_header)
+        .map((p) => ({
+          name: p.name,
+          model: p.model || '',
+          qty: p.qty,
+          unit: p.unit,
+          unit_price_foreign: p.unit_price_foreign,
+          amount_foreign: p.amount_foreign,
+        })),
+    }
+    localStorage.setItem('leadspark_cipl_prefill', JSON.stringify(prefill))
+    router.push('/documents/ci-pl')
+  }
+
   const handleDuplicate = () => {
     if (!quotation) return
     const dataRows = quotation.products.filter((p) => !p.is_container_header)
@@ -309,6 +333,10 @@ export default function QuotationDetailPage() {
             ? quotation.seller_visible_pi !== false
             : quotation.seller_visible_ci !== false
 
+      // react-pdf can only load absolute http/https URLs for images
+      const safeLogoUrl = profile?.logo_url && /^https?:\/\//i.test(profile.logo_url)
+        ? profile.logo_url : undefined
+
       const element = React.createElement(QuotationPDF, {
         companyName: profile?.company_name || 'Your Company',
         companyNameCn: profile?.company_name_cn,
@@ -316,7 +344,7 @@ export default function QuotationDetailPage() {
         phone: profile?.phone,
         email: profile?.email,
         website: profile?.website,
-        logoUrl: profile?.logo_url,
+        logoUrl: safeLogoUrl,
         bankName: profile?.bank_name,
         bankAccount: profile?.bank_account,
         bankSwift: profile?.bank_swift,
@@ -388,13 +416,17 @@ export default function QuotationDetailPage() {
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={() => router.push('/quote/history')}>
             <ArrowLeft className="mr-2 h-4 w-4" />
-            报价历史
+            订单跟进
           </Button>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => { setAiEmailResult(null); setAiPanelOpen(true); handleGenerateReply(quotation) }}>
             <Sparkles className="mr-1.5 h-4 w-4 text-blue-500" />
             AI 生成回复邮件
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleGenerateCiPl}>
+            <Ship className="mr-1.5 h-4 w-4" />
+            生成 CI/PL
           </Button>
           <Button variant="outline" onClick={handleDuplicate}>
             <Copy className="mr-2 h-4 w-4" />
