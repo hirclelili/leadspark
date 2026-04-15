@@ -449,6 +449,7 @@ export default function QuotePage() {
   const [quoteStep, setQuoteStep] = useState<1 | 2>(1)
   const [customerQuery, setCustomerQuery] = useState('')
   const [customerResults, setCustomerResults] = useState<Customer[]>([])
+  const [customerListKey, setCustomerListKey] = useState(0)  // increment to force reload
   const [customerLoading, setCustomerLoading] = useState(false)
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
   const [isNewCustomer, setIsNewCustomer] = useState(false)
@@ -663,19 +664,22 @@ export default function QuotePage() {
     localStorage.setItem('leadspark_calc_products', JSON.stringify(calcProducts))
   }, [calcProducts])
 
-  // Search customers with debounce
+  // Search customers with debounce — empty query shows recent customers
   useEffect(() => {
-    if (!customerQuery.trim()) { setCustomerResults([]); return }
+    const q = customerQuery.trim()
     const timer = setTimeout(async () => {
       setCustomerLoading(true)
       try {
-        const res = await fetch(`/api/customers?search=${encodeURIComponent(customerQuery)}&limit=8`)
+        const url = q
+          ? `/api/customers?search=${encodeURIComponent(q)}&limit=10`
+          : `/api/customers?limit=10`
+        const res = await fetch(url)
         const data = await res.json()
         setCustomerResults(data.customers || [])
       } catch { /* ignore */ } finally { setCustomerLoading(false) }
-    }, 300)
+    }, q ? 250 : 0)   // immediate for initial load, debounced for typing
     return () => clearTimeout(timer)
-  }, [customerQuery])
+  }, [customerQuery, customerListKey])
 
   useEffect(() => {
     pdfProductListCalcLenRef.current = null
@@ -868,7 +872,7 @@ export default function QuotePage() {
       (isNewCustomer && newCustomerData.company_name.trim() !== '')
     setQuoteStep(hasCustomer ? 2 : 1)
     setCustomerQuery('')
-    setCustomerResults([])
+    setCustomerListKey(k => k + 1)   // trigger fresh customer list load
 
     try {
       // Use profile from context (already loaded by server layout)
@@ -1455,7 +1459,7 @@ export default function QuotePage() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                 <Input
                   className="pl-9"
-                  placeholder="搜索客户公司名称…"
+                  placeholder="输入关键字筛选…"
                   value={customerQuery}
                   onChange={(e) => {
                     setCustomerQuery(e.target.value)
@@ -1463,24 +1467,30 @@ export default function QuotePage() {
                   }}
                 />
               </div>
-              {customerLoading && (
-                <div className="flex justify-center py-2">
-                  <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+              {customerLoading ? (
+                <div className="flex justify-center py-3">
+                  <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
                 </div>
-              )}
-              {customerResults.length > 0 && (
-                <div className="border rounded-lg divide-y max-h-40 overflow-y-auto">
+              ) : customerResults.length > 0 ? (
+                <div className="border rounded-lg divide-y max-h-48 overflow-y-auto">
+                  {!customerQuery && (
+                    <div className="px-3 py-1.5 text-xs text-gray-400 bg-gray-50 border-b">最近客户</div>
+                  )}
                   {customerResults.map((c) => (
                     <div
                       key={c.id}
                       onClick={() => handleSelectCustomer(c)}
-                      className={`p-3 cursor-pointer hover:bg-gray-50 text-sm ${selectedCustomer?.id === c.id ? 'bg-blue-50' : ''}`}
+                      className={`px-3 py-2.5 cursor-pointer hover:bg-gray-50 text-sm ${selectedCustomer?.id === c.id ? 'bg-blue-50' : ''}`}
                     >
                       <div className="font-medium">{c.company_name}</div>
-                      {c.contact_name && <div className="text-xs text-gray-500">{c.contact_name}</div>}
+                      {c.contact_name && <div className="text-xs text-gray-400">{c.contact_name}</div>}
                     </div>
                   ))}
                 </div>
+              ) : !customerQuery ? (
+                <div className="text-xs text-gray-400 text-center py-3">暂无客户，可新建</div>
+              ) : (
+                <div className="text-xs text-gray-400 text-center py-3">未找到匹配客户</div>
               )}
               {selectedCustomer && (
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm">
