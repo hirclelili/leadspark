@@ -182,21 +182,26 @@ export default function CustomersPage() {
     }
   }
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('确定要删除这个客户吗？')) return
-
-    try {
-      const res = await fetch(`/api/customers/${id}`, { method: 'DELETE' })
-      const data = await res.json()
-      if (data.error) {
-        toast.error(data.error)
-      } else {
-        toast.success('删除成功')
-        fetchCustomers()
-      }
-    } catch (error) {
-      console.error('Error:', error)
-    }
+  const handleDelete = (id: string, companyName: string) => {
+    toast(`确定删除「${companyName}」？此操作不可恢复`, {
+      action: {
+        label: '确认删除',
+        onClick: async () => {
+          try {
+            const res = await fetch(`/api/customers/${id}`, { method: 'DELETE' })
+            const data = await res.json()
+            if (!res.ok || data.error) {
+              toast.error(data.error || '删除失败')
+            } else {
+              toast.success('删除成功')
+              fetchCustomers()
+            }
+          } catch {
+            toast.error('删除失败，请检查网络')
+          }
+        },
+      },
+    })
   }
 
   const getStatusStyle = (s: string) => {
@@ -438,7 +443,7 @@ export default function CustomersPage() {
                             size="sm"
                             onClick={(e) => {
                               e.stopPropagation()
-                              handleDelete(customer.id)
+                              handleDelete(customer.id, customer.company_name)
                             }}
                           >
                             <Trash2 className="w-4 h-4 text-red-500" />

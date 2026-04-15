@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { useUserProfile } from '@/contexts/UserProfileContext'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -44,12 +45,14 @@ const QUICK_ACTIONS = [
 ]
 
 export default function AiPage() {
+  const { profile: userProfile } = useUserProfile()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [contextInfo, setContextInfo] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const initializedRef = useRef(false)
 
   useEffect(() => {
     loadContext()
@@ -59,16 +62,26 @@ export default function AiPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // Re-initialize welcome message once profile loads (context may arrive after mount)
+  useEffect(() => {
+    if (userProfile && !initializedRef.current && messages.length > 0) {
+      initializedRef.current = true
+      const company = userProfile.company_name || '您的公司'
+      setMessages(prev => [
+        { ...prev[0], content: prev[0].content.replace(/您的公司|.+(?= 的 AI)/, company) },
+        ...prev.slice(1),
+      ])
+      setContextInfo(prev => prev.replace(/您的公司|^[^·]+/, company))
+    }
+  }, [userProfile])
+
   const loadContext = async () => {
     try {
-      const [profileRes, productsRes] = await Promise.all([
-        fetch('/api/user-profile'),
-        fetch('/api/products?limit=20'),
-      ])
-      const profile = profileRes.ok ? await profileRes.json() : null
+      // Use profile from context if available; otherwise fall back to a quick fetch
+      const company = userProfile?.company_name || '您的公司'
+      const productsRes = await fetch('/api/products?limit=20')
       const productsData = productsRes.ok ? await productsRes.json() : null
       const productCount = productsData?.products?.length || 0
-      const company = profile?.company_name || '您的公司'
       setContextInfo(`${company} · 已加载 ${productCount} 个产品`)
 
       // Welcome message

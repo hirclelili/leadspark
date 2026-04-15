@@ -6,7 +6,7 @@ import {
   ArrowLeft, Building, Mail, Phone, Globe, Calendar, FileText,
   MessageSquare, Loader2, Plus, Edit, Trash2, Sparkles, ClipboardCopy
 } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
+import { useUserProfile } from '@/contexts/UserProfileContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -62,6 +62,7 @@ export default function CustomerDetailPage() {
   const router = useRouter()
   const params = useParams()
   const id = params.id as string
+  const { profile: userProfile } = useUserProfile()
 
   const [loading, setLoading] = useState(true)
   const [customer, setCustomer] = useState<Customer | null>(null)
@@ -133,6 +134,7 @@ export default function CustomerDetailPage() {
   }
 
   const handleSave = async () => {
+    if (!formData.company_name.trim()) { toast.error('公司名称不能为空'); return }
     setSaving(true)
     try {
       const res = await fetch(`/api/customers/${id}`, {
@@ -140,10 +142,9 @@ export default function CustomerDetailPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
       })
-
       const data = await res.json()
-      if (data.error) {
-        toast.error(data.error)
+      if (!res.ok || data.error) {
+        toast.error(data.error || '保存失败')
       } else {
         toast.success('更新成功')
         setEditing(false)
@@ -151,6 +152,7 @@ export default function CustomerDetailPage() {
       }
     } catch (error) {
       console.error('Error:', error)
+      toast.error('保存失败，请检查网络连接')
     } finally {
       setSaving(false)
     }
@@ -196,12 +198,7 @@ export default function CustomerDetailPage() {
     setAiGenerating(true)
     setAiReplyResult(null)
     try {
-      let companyName = ''
-      try {
-        const pr = await fetch('/api/user-profile')
-        const p = await pr.json()
-        companyName = p?.company_name || ''
-      } catch { /* ignore */ }
+      const companyName = userProfile?.company_name || ''
 
       const q = quotations[0]
       if (!q) { toast.error('该客户暂无报价记录'); setAiGenerating(false); return }

@@ -22,10 +22,10 @@ export default async function DashboardPage() {
 
   const companyName = profile?.company_name || ''
 
-  // Get stats
-  const { data: products } = await supabase
+  // Get stats — use count-only queries (no row data needed)
+  const { count: totalProducts } = await supabase
     .from('products')
-    .select('id')
+    .select('id', { count: 'exact', head: true })
     .eq('user_id', user.id)
 
   const { data: customers } = await supabase
@@ -33,9 +33,9 @@ export default async function DashboardPage() {
     .select('status')
     .eq('user_id', user.id)
 
-  const { data: quotations } = await supabase
+  const { count: totalQuotations } = await supabase
     .from('quotations')
-    .select('id')
+    .select('id', { count: 'exact', head: true })
     .eq('user_id', user.id)
 
   const { data: recentQuotations } = await supabase
@@ -87,9 +87,7 @@ export default async function DashboardPage() {
   }))
 
   // Calculate stats
-  const totalProducts = products?.length || 0
   const totalCustomers = customers?.length || 0
-  const totalQuotations = quotations?.length || 0
   const customersByStatus = {
     new: customers?.filter(c => c.status === 'new').length || 0,
     quoted: customers?.filter(c => c.status === 'quoted').length || 0,
@@ -102,9 +100,9 @@ export default async function DashboardPage() {
     <DashboardClient
       companyName={companyName}
       stats={{
-        totalProducts,
+        totalProducts: totalProducts ?? 0,
         totalCustomers,
-        totalQuotations,
+        totalQuotations: totalQuotations ?? 0,
         customersByStatus,
       }}
       recentQuotations={recentQuotations || []}

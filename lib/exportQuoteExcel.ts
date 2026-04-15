@@ -147,7 +147,7 @@ export async function exportQuoteExcel(opts: QuoteExcelOptions): Promise<void> {
   sc(ws.getCell(`A${r}`), { value: companyName + (companyNameCn ? `  ${companyNameCn}` : ''), bold: true, size: 14, color: C.headerFg, bg: C.headerBg, align: 'center' })
   r++
 
-  const infoLine = [address, [phone && `Tel: ${phone}`, email && `Email: ${email}`, website].filter(Boolean).join('   ')].filter(Boolean).join('   |   ')
+  const infoLine = [address, [phone && `Tel: ${phone}`, email && `Email: ${email}`, website && `Web: ${website}`].filter(Boolean).join('   ')].filter(Boolean).join('   |   ')
   if (infoLine) {
     ws.getRow(r).height = 13
     ws.mergeCells(`A${r}:${lastC}${r}`)

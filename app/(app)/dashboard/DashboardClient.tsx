@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { Calculator, Package, Users, Settings, TrendingUp, FileText, ArrowRight } from 'lucide-react'
+import { Calculator, Package, Users, Building2, TrendingUp, FileText, ArrowRight } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import {
@@ -112,9 +112,9 @@ export function DashboardClient({
           <Card className="hover:shadow-md transition-shadow cursor-pointer">
             <CardContent className="pt-6 flex flex-col items-center">
               <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mb-3">
-                <Settings className="w-6 h-6 text-gray-600" />
+                <Building2 className="w-6 h-6 text-gray-600" />
               </div>
-              <span className="font-medium">设置</span>
+              <span className="font-medium">企业资料</span>
             </CardContent>
           </Card>
         </Link>
