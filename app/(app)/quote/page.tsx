@@ -472,8 +472,11 @@ export default function QuotePage() {
     remarks: '',
     validityDays: 30,
   })
-  const [generating, setGenerating] = useState(false)
+  const [generatingPdf, setGeneratingPdf] = useState(false)
+  const [generatingXlsx, setGeneratingXlsx] = useState(false)
   const [previewing, setPreviewing] = useState(false)
+  // legacy alias kept so other references still compile
+  const generating = generatingPdf || generatingXlsx
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   const [pdfProducts, setPdfProducts] = useState<PDFProductRow[]>([])
   const [quoteLayoutMode, setQuoteLayoutMode] = useState<QuoteLayoutMode>('product_list')
@@ -947,8 +950,17 @@ export default function QuotePage() {
       return
     }
 
-    setGenerating(true)
+    if (format === 'xlsx') setGeneratingXlsx(true)
+    else setGeneratingPdf(true)
     try {
+      // Always fetch fresh profile so settings changes are picked up immediately
+      let liveProfile: UserProfile | null = userProfile
+      try {
+        const pr = await fetch('/api/user-profile')
+        const p = await pr.json()
+        if (p && !p.error) { liveProfile = p; setUserProfile(p) }
+      } catch { /* keep cached */ }
+
       let customerId = selectedCustomer?.id
       let customerName = selectedCustomer?.company_name || ''
       let customerContact = selectedCustomer?.contact_name || ''
@@ -1083,16 +1095,16 @@ export default function QuotePage() {
       const depPct = docKind === 'PI' ? parseFloat(quoteDetails.depositPercent) || 0 : 0
 
       const sharedProps = {
-        companyName: userProfile?.company_name || 'Your Company',
-        companyNameCn: userProfile?.company_name_cn as string | undefined,
-        address: userProfile?.address as string | undefined,
-        phone: userProfile?.phone as string | undefined,
-        email: userProfile?.email as string | undefined,
-        website: userProfile?.website as string | undefined,
-        bankName: userProfile?.bank_name as string | undefined,
-        bankAccount: userProfile?.bank_account as string | undefined,
-        bankSwift: userProfile?.bank_swift as string | undefined,
-        bankBeneficiary: userProfile?.bank_beneficiary as string | undefined,
+        companyName: liveProfile?.company_name || 'Your Company',
+        companyNameCn: liveProfile?.company_name_cn as string | undefined,
+        address: liveProfile?.address as string | undefined,
+        phone: liveProfile?.phone as string | undefined,
+        email: liveProfile?.email as string | undefined,
+        website: liveProfile?.website as string | undefined,
+        bankName: liveProfile?.bank_name as string | undefined,
+        bankAccount: liveProfile?.bank_account as string | undefined,
+        bankSwift: liveProfile?.bank_swift as string | undefined,
+        bankBeneficiary: liveProfile?.bank_beneficiary as string | undefined,
         clientName: customerName,
         clientContact: customerContact || undefined,
         clientAddress: customerAddress || undefined,
@@ -1133,7 +1145,7 @@ export default function QuotePage() {
         // ── PDF export ─────────────────────────────────────────────────────
         const { pdf } = await import('@react-pdf/renderer')
         const { QuotationPDF } = await import('@/components/pdf/QuotationPDF')
-        const safeLogoUrl = userProfile?.logo_url && /^https?:\/\//i.test(userProfile.logo_url as string) ? userProfile.logo_url as string : undefined
+        const safeLogoUrl = liveProfile?.logo_url && /^https?:\/\//i.test(liveProfile.logo_url as string) ? liveProfile.logo_url as string : undefined
         const basePdfProps = {
           ...sharedProps,
           logoUrl: safeLogoUrl,
@@ -1170,7 +1182,8 @@ export default function QuotePage() {
     } catch (error: unknown) {
       toast.error(error instanceof Error ? error.message : '生成失败，请重试')
     } finally {
-      setGenerating(false)
+      setGeneratingPdf(false)
+      setGeneratingXlsx(false)
     }
   }
 
@@ -2625,16 +2638,24 @@ export default function QuotePage() {
 
               <div className="space-y-2">
                 <div className="flex gap-2">
-                  <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => handleGeneratePDF('xlsx')} disabled={generating || previewing}>
-                    {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
-                    保存并下载 Excel
+                  <Button
+                    className="flex-1 bg-emerald-600 hover:bg-emerald-700"
+                    onClick={() => handleGeneratePDF('xlsx')}
+                    disabled={generatingXlsx || generatingPdf || previewing}
+                  >
+                    {generatingXlsx ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
+                    {generatingXlsx ? '生成中…' : '保存并下载 Excel'}
                   </Button>
-                  <Button className="flex-1" onClick={() => handleGeneratePDF('pdf')} disabled={generating || previewing}>
-                    {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
-                    保存并下载 PDF
+                  <Button
+                    className="flex-1"
+                    onClick={() => handleGeneratePDF('pdf')}
+                    disabled={generatingPdf || generatingXlsx || previewing}
+                  >
+                    {generatingPdf ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
+                    {generatingPdf ? '生成中…' : '保存并下载 PDF'}
                   </Button>
                 </div>
-                <Button variant="outline" className="w-full" onClick={handlePreviewPDF} disabled={previewing || generating}>
+                <Button variant="outline" className="w-full" onClick={handlePreviewPDF} disabled={previewing || generatingPdf || generatingXlsx}>
                   {previewing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
                   预览 PDF
                 </Button>
