@@ -5,7 +5,7 @@ import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Download, Building, Loader2, FileText,
-  CreditCard, Package, Truck, Hash, Copy, ChevronDown, Send, Sparkles, ClipboardCopy, Ship
+  CreditCard, Package, Truck, Hash, Copy, ChevronDown, Send, Sparkles, ClipboardCopy, Ship, FileSpreadsheet
 } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -21,6 +21,7 @@ import {
 import { toast } from 'sonner'
 import type { DocumentKind, QuoteLayoutMode } from '@/components/pdf/QuotationPDF'
 import { AiSidePanel } from '@/components/AiSidePanel'
+import { exportQuoteExcel } from '@/lib/exportQuoteExcel'
 
 const STATUS_CONFIG = {
   draft:       { label: '草稿',   color: 'bg-gray-100 text-gray-600' },
@@ -102,6 +103,7 @@ export default function QuotationDetailPage() {
   const [quotation, setQuotation] = useState<QuotationDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
+  const [downloadingExcel, setDownloadingExcel] = useState(false)
   const [updatingStatus, setUpdatingStatus] = useState(false)
   const [sendingEmail, setSendingEmail] = useState(false)
 
@@ -310,6 +312,59 @@ export default function QuotationDetailPage() {
     }
   }
 
+  const handleRedownloadExcel = async () => {
+    if (!quotation) return
+    setDownloadingExcel(true)
+    try {
+      const profileRes = await fetch('/api/user-profile')
+      const profile = profileRes.ok ? await profileRes.json() : null
+      const docKind = (quotation.document_kind === 'PI' ? 'PI' : 'QUOTATION') as 'PI' | 'QUOTATION'
+      const displayNo = (quotation.reference_number?.trim()) || quotation.quotation_number
+      await exportQuoteExcel({
+        documentKind: docKind,
+        companyName: profile?.company_name || 'Your Company',
+        companyNameCn: profile?.company_name_cn,
+        address: profile?.address,
+        phone: profile?.phone,
+        email: profile?.email,
+        website: profile?.website,
+        bankName: profile?.bank_name,
+        bankAccount: profile?.bank_account,
+        bankSwift: profile?.bank_swift,
+        bankBeneficiary: profile?.bank_beneficiary,
+        clientName: quotation.customers?.company_name || '—',
+        clientContact: quotation.customers?.contact_name || undefined,
+        documentNumber: displayNo,
+        date: new Date(quotation.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+        validityDays: quotation.validity_days,
+        tradeTerm: quotation.trade_term,
+        currency: quotation.currency,
+        paymentTerms: quotation.payment_terms,
+        deliveryTime: quotation.delivery_time,
+        packing: quotation.packing || undefined,
+        remarks: quotation.remarks || undefined,
+        poNumber: quotation.po_number?.trim() || undefined,
+        depositPercent: docKind === 'PI' ? Number(quotation.deposit_percent) || 0 : 0,
+        products: quotation.products.map(p => ({
+          name: p.name,
+          model: p.model || undefined,
+          specs: p.specs || undefined,
+          qty: p.qty,
+          unit: p.unit,
+          unit_price_foreign: p.unit_price_foreign,
+          amount_foreign: p.amount_foreign,
+          is_container_header: p.is_container_header === true,
+        })),
+        totalAmount: quotation.total_amount_foreign,
+      })
+      toast.success('Excel 下载成功')
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : '下载失败')
+    } finally {
+      setDownloadingExcel(false)
+    }
+  }
+
   const handleRedownload = async () => {
     if (!quotation) return
     setDownloading(true)
@@ -442,13 +497,21 @@ export default function QuotationDetailPage() {
               发送给客户
             </Button>
           )}
-          <Button onClick={handleRedownload} disabled={downloading}>
+          <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={handleRedownloadExcel} disabled={downloadingExcel}>
+            {downloadingExcel ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <FileSpreadsheet className="mr-2 h-4 w-4" />
+            )}
+            下载 Excel
+          </Button>
+          <Button variant="outline" onClick={handleRedownload} disabled={downloading}>
             {downloading ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             ) : (
               <Download className="mr-2 h-4 w-4" />
             )}
-            重新下载 PDF
+            下载 PDF
           </Button>
         </div>
       </div>

@@ -23,6 +23,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { CURRENCY_OPTIONS, getCurrencySymbol } from '@/lib/currencies'
+import { exportQuoteExcel } from '@/lib/exportQuoteExcel'
 
 const TRADE_TERMS = [
   { code: 'EXW', name: 'EXW', desc: '工厂交货' },
@@ -928,7 +929,7 @@ export default function QuotePage() {
     }
   }
 
-  const handleGeneratePDF = async () => {
+  const handleGeneratePDF = async (format: 'pdf' | 'xlsx' = 'pdf') => {
     if (!selectedCustomer && !isNewCustomer) { toast.error('请选择或新建客户'); return }
     if (isNewCustomer && !newCustomerData.company_name.trim()) { toast.error('请填写客户公司名称'); return }
     if (!selectedTradeResult || !multiResultsFactory) { toast.error('请先填写成本信息并计算报价'); return }
@@ -1070,9 +1071,6 @@ export default function QuotePage() {
         })
       }
 
-      const { pdf } = await import('@react-pdf/renderer')
-      const { QuotationPDF } = await import('@/components/pdf/QuotationPDF')
-
       const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
       const docKind = quoteDetails.documentKind
       const showSellerHeader =
@@ -1082,36 +1080,30 @@ export default function QuotePage() {
             ? quoteDetails.sellerVisiblePi
             : quoteDetails.sellerVisibleCi
       const displayNo = quoteDetails.referenceNumber.trim() || savedQuote.quotation_number
-      const depPct =
-        docKind === 'PI' ? parseFloat(quoteDetails.depositPercent) || 0 : 0
+      const depPct = docKind === 'PI' ? parseFloat(quoteDetails.depositPercent) || 0 : 0
 
-      const basePdfProps = {
+      const sharedProps = {
         companyName: userProfile?.company_name || 'Your Company',
-        companyNameCn: userProfile?.company_name_cn,
-        address: userProfile?.address,
-        phone: userProfile?.phone,
-        email: userProfile?.email,
-        website: userProfile?.website,
-        logoUrl: userProfile?.logo_url && /^https?:\/\//i.test(userProfile.logo_url) ? userProfile.logo_url : undefined,
-        bankName: userProfile?.bank_name,
-        bankAccount: userProfile?.bank_account,
-        bankSwift: userProfile?.bank_swift,
-        bankBeneficiary: userProfile?.bank_beneficiary,
+        companyNameCn: userProfile?.company_name_cn as string | undefined,
+        address: userProfile?.address as string | undefined,
+        phone: userProfile?.phone as string | undefined,
+        email: userProfile?.email as string | undefined,
+        website: userProfile?.website as string | undefined,
+        bankName: userProfile?.bank_name as string | undefined,
+        bankAccount: userProfile?.bank_account as string | undefined,
+        bankSwift: userProfile?.bank_swift as string | undefined,
+        bankBeneficiary: userProfile?.bank_beneficiary as string | undefined,
         clientName: customerName,
         clientContact: customerContact || undefined,
         clientAddress: customerAddress || undefined,
-        quotationNumber: savedQuote.quotation_number,
-        documentNumberDisplay: displayNo,
+        documentNumber: displayNo,
         date: today,
         validityDays: quoteDetails.validityDays,
         currency: formData.currency,
-        quoteMode: quoteLayoutMode,
         paymentTerms: quoteDetails.paymentTerms,
         deliveryTime: quoteDetails.deliveryTime,
         packing: quoteDetails.packing || undefined,
         remarks: quoteDetails.remarks || undefined,
-        documentKind: docKind,
-        showSellerHeader,
         poNumber: quoteDetails.poNumber.trim() || undefined,
         depositPercent: depPct,
       }
@@ -1128,39 +1120,49 @@ export default function QuotePage() {
           is_container_header: p.isContainerHeader === true,
         }))
 
-      if (twoPdfMode && rowsExw && rowsLogistics) {
-        const totalA = sumPdfProductRowsForeign(rowsExw)
-        const totalB = sumPdfProductRowsForeign(rowsLogistics)
-        const elA = React.createElement(QuotationPDF, {
-          ...basePdfProps,
-          tradeTerm: 'EXW',
-          products: mapRows(rowsExw),
-          totalAmount: totalA,
-          quoteSummaryLines: undefined,
-        })
-        const elB = React.createElement(QuotationPDF, {
-          ...basePdfProps,
-          tradeTerm: piLogisticsTerm,
-          products: mapRows(rowsLogistics),
-          totalAmount: totalB,
-          quoteSummaryLines: undefined,
-        })
-        const blobA = await pdf(elA as Parameters<typeof pdf>[0]).toBlob()
-        const blobB = await pdf(elB as Parameters<typeof pdf>[0]).toBlob()
-        downloadPdfBlob(blobA, `${savedQuote.quotation_number}-EXW.pdf`)
-        setTimeout(() => {
-          downloadPdfBlob(blobB, `${savedQuote.quotation_number}-${piLogisticsTerm}.pdf`)
-        }, 400)
+      if (format === 'xlsx') {
+        // ── Excel export ───────────────────────────────────────────────────
+        const xlKind = (docKind === 'PI' ? 'PI' : 'QUOTATION') as 'PI' | 'QUOTATION'
+        if (twoPdfMode && rowsExw && rowsLogistics) {
+          await exportQuoteExcel({ ...sharedProps, documentKind: xlKind, tradeTerm: 'EXW', products: mapRows(rowsExw), totalAmount: sumPdfProductRowsForeign(rowsExw), quoteSummaryLines: undefined })
+          await exportQuoteExcel({ ...sharedProps, documentKind: xlKind, documentNumber: `${displayNo}-${piLogisticsTerm}`, tradeTerm: piLogisticsTerm, products: mapRows(rowsLogistics), totalAmount: sumPdfProductRowsForeign(rowsLogistics), quoteSummaryLines: undefined })
+        } else {
+          await exportQuoteExcel({ ...sharedProps, documentKind: xlKind, tradeTerm: tradeTermForSave, products: mapRows(rowsPrimary), totalAmount: totalForeign, quoteSummaryLines })
+        }
       } else {
-        const element = React.createElement(QuotationPDF, {
-          ...basePdfProps,
+        // ── PDF export ─────────────────────────────────────────────────────
+        const { pdf } = await import('@react-pdf/renderer')
+        const { QuotationPDF } = await import('@/components/pdf/QuotationPDF')
+        const safeLogoUrl = userProfile?.logo_url && /^https?:\/\//i.test(userProfile.logo_url as string) ? userProfile.logo_url as string : undefined
+        const basePdfProps = {
+          ...sharedProps,
+          logoUrl: safeLogoUrl,
+          quotationNumber: savedQuote.quotation_number,
+          documentNumberDisplay: displayNo,
+          quoteMode: quoteLayoutMode,
+          documentKind: docKind,
+          showSellerHeader,
           tradeTerm: tradeTermForSave,
-          products: mapRows(rowsPrimary),
-          totalAmount: totalForeign,
-          quoteSummaryLines,
-        })
-        const blob = await pdf(element as Parameters<typeof pdf>[0]).toBlob()
-        downloadPdfBlob(blob, `${savedQuote.quotation_number}.pdf`)
+        }
+        try {
+          if (twoPdfMode && rowsExw && rowsLogistics) {
+            const totalA = sumPdfProductRowsForeign(rowsExw)
+            const totalB = sumPdfProductRowsForeign(rowsLogistics)
+            const elA = React.createElement(QuotationPDF, { ...basePdfProps, tradeTerm: 'EXW', products: mapRows(rowsExw), totalAmount: totalA, quoteSummaryLines: undefined })
+            const elB = React.createElement(QuotationPDF, { ...basePdfProps, tradeTerm: piLogisticsTerm, products: mapRows(rowsLogistics), totalAmount: totalB, quoteSummaryLines: undefined })
+            const blobA = await pdf(elA as Parameters<typeof pdf>[0]).toBlob()
+            const blobB = await pdf(elB as Parameters<typeof pdf>[0]).toBlob()
+            downloadPdfBlob(blobA, `${savedQuote.quotation_number}-EXW.pdf`)
+            setTimeout(() => downloadPdfBlob(blobB, `${savedQuote.quotation_number}-${piLogisticsTerm}.pdf`), 400)
+          } else {
+            const element = React.createElement(QuotationPDF, { ...basePdfProps, products: mapRows(rowsPrimary), totalAmount: totalForeign, quoteSummaryLines })
+            const blob = await pdf(element as Parameters<typeof pdf>[0]).toBlob()
+            downloadPdfBlob(blob, `${savedQuote.quotation_number}.pdf`)
+          }
+        } catch (pdfErr: unknown) {
+          console.error('PDF generation error:', pdfErr)
+          throw new Error(`PDF 生成失败：${pdfErr instanceof Error ? pdfErr.message : String(pdfErr)}`)
+        }
       }
 
       toast.success(`报价单 ${savedQuote.quotation_number} 已生成并保存`)
@@ -2626,9 +2628,13 @@ export default function QuotePage() {
                   {previewing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
                   预览
                 </Button>
-                <Button className="flex-1" onClick={handleGeneratePDF} disabled={generating || previewing}>
+                <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700" onClick={() => handleGeneratePDF('xlsx')} disabled={generating || previewing}>
                   {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
-                  保存并下载
+                  保存并下载 Excel
+                </Button>
+                <Button className="flex-1" onClick={() => handleGeneratePDF('pdf')} disabled={generating || previewing}>
+                  {generating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
+                  保存并下载 PDF
                 </Button>
               </div>
             </div>
