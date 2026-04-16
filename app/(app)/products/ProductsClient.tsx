@@ -79,9 +79,11 @@ export function ProductsClient() {
       if (category && category !== 'all') params.set('category', category)
 
       const res = await fetch(`/api/products?${params}`)
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
 
-      if (data.error) {
+      if (!res.ok) {
+        toast.error(typeof data.error === 'string' ? data.error : '加载产品列表失败')
+      } else if (data.error) {
         toast.error(data.error)
       } else {
         setProducts(data.products || [])
@@ -89,6 +91,7 @@ export function ProductsClient() {
         setCategories(data.categories || [])
       }
     } catch (error) {
+      toast.error('加载产品列表失败，请重试')
       console.error('Error:', error)
     } finally {
       setLoading(false)

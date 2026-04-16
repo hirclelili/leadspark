@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { FileText, ChevronLeft, ChevronRight, Search, X, ArrowRight } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
@@ -99,10 +100,15 @@ export default function QuoteHistoryPage() {
       if (date_to) params.set('date_to', date_to)
 
       const res = await fetch(`/api/quotations?${params}`)
-      const data = await res.json()
-      setQuotations(data.quotations || [])
-      setTotal(data.total || 0)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(typeof data.error === 'string' ? data.error : '加载报价记录失败')
+      } else {
+        setQuotations(data.quotations || [])
+        setTotal(data.total || 0)
+      }
     } catch (error) {
+      toast.error('加载报价记录失败，请重试')
       console.error('Error:', error)
     } finally {
       setLoading(false)

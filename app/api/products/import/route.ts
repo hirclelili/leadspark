@@ -12,6 +12,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: '请上传文件' }, { status: 400 })
     }
 
+    const MAX_SIZE = 5 * 1024 * 1024 // 5 MB
+    if (file.size > MAX_SIZE) {
+      return NextResponse.json({ error: '文件过大，最大支持 5 MB' }, { status: 400 })
+    }
+
     const allowedTypes = [
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.ms-excel',

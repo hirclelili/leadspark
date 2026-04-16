@@ -13,48 +13,33 @@ export default async function DashboardPage() {
     redirect('/login')
   }
 
-  // Get user profile for company name
-  const { data: profile } = await supabase
-    .from('user_profiles')
-    .select('company_name')
-    .eq('user_id', user.id)
-    .single()
-
-  const companyName = profile?.company_name || ''
-
-  // Get stats — use count-only queries (no row data needed)
-  const { count: totalProducts } = await supabase
-    .from('products')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', user.id)
-
-  const { data: customers } = await supabase
-    .from('customers')
-    .select('status')
-    .eq('user_id', user.id)
-
-  const { count: totalQuotations } = await supabase
-    .from('quotations')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', user.id)
-
-  const { data: recentQuotations } = await supabase
-    .from('quotations')
-    .select('*, customers(company_name)')
-    .eq('user_id', user.id)
-    .order('created_at', { ascending: false })
-    .limit(10)
-
-  // Chart data: last 6 months
+  // Chart date range — computed before launching parallel queries
   const sixMonthsAgo = new Date()
   sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
   sixMonthsAgo.setDate(1)
-  const { data: chartQuotations } = await supabase
-    .from('quotations')
-    .select('created_at, total_amount_foreign, status')
-    .eq('user_id', user.id)
-    .gte('created_at', sixMonthsAgo.toISOString())
-    .order('created_at')
+
+  // Run all DB queries in parallel — reduces dashboard TTFB significantly
+  const [
+    { data: profile },
+    { count: totalProducts },
+    { data: customers },
+    { count: totalQuotations },
+    { data: recentQuotations },
+    { data: chartQuotations },
+  ] = await Promise.all([
+    supabase.from('user_profiles').select('company_name').eq('user_id', user.id).single(),
+    supabase.from('products').select('id', { count: 'exact', head: true }).eq('user_id', user.id),
+    supabase.from('customers').select('status').eq('user_id', user.id),
+    supabase.from('quotations').select('id', { count: 'exact', head: true }).eq('user_id', user.id),
+    supabase
+      .from('quotations').select('*, customers(company_name)')
+      .eq('user_id', user.id).order('created_at', { ascending: false }).limit(10),
+    supabase
+      .from('quotations').select('created_at, total_amount_foreign, status')
+      .eq('user_id', user.id).gte('created_at', sixMonthsAgo.toISOString()).order('created_at'),
+  ])
+
+  const companyName = profile?.company_name || ''
 
   // Aggregate monthly totals (USD-equivalent)
   const monthMap: Record<string, number> = {}

@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { toast } from 'sonner'
+import { CURRENCY_OPTIONS } from '@/lib/currencies'
 
 interface UserProfile {
   id?: string
@@ -34,18 +35,7 @@ interface UserProfile {
   bank_beneficiary?: string
 }
 
-const currencies = [
-  { value: 'USD', label: 'USD - 美元' },
-  { value: 'EUR', label: 'EUR - 欧元' },
-  { value: 'GBP', label: 'GBP - 英镑' },
-  { value: 'JPY', label: 'JPY - 日元' },
-  { value: 'AUD', label: 'AUD - 澳元' },
-  { value: 'CAD', label: 'CAD - 加元' },
-  { value: 'AED', label: 'AED - 迪拉姆' },
-  { value: 'SGD', label: 'SGD - 新加坡元' },
-  { value: 'CNY', label: 'CNY - 人民币' },
-  { value: 'HKD', label: 'HKD - 港币' },
-]
+const currencies = CURRENCY_OPTIONS
 
 const paymentTermsOptions = [
   { value: 'T/T 30% deposit, 70% before shipment', label: 'T/T 30% 定金，70% 出货前付清' },

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   Users, Search, Plus, Loader2, Edit, Trash2,
@@ -70,16 +70,19 @@ export default function CustomersPage() {
   })
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    fetchCustomers()
-  }, [page, search, status])
+  // AbortController ref — cancels in-flight request when a newer one starts
+  const abortRef = useRef<AbortController | null>(null)
 
-  /** 可选参数用于保存后立即拉取，避免仍用旧的 page/search/status（新建客户常因此被筛掉或不在当前页） */
-  const fetchCustomers = async (opts?: {
+  const fetchCustomers = useCallback(async (opts?: {
     page?: number
     search?: string
     status?: string
   }) => {
+    // Abort previous in-flight request to prevent race conditions
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+
     setLoading(true)
     const pageNum = opts?.page ?? page
     const searchStr = opts?.search !== undefined ? opts.search : search
@@ -92,7 +95,7 @@ export default function CustomersPage() {
       if (searchStr) params.set('search', searchStr)
       if (statusStr && statusStr !== 'all') params.set('status', statusStr)
 
-      const res = await fetch(`/api/customers?${params}`)
+      const res = await fetch(`/api/customers?${params}`, { signal: controller.signal })
       const data = await res.json().catch(() => ({}))
 
       if (!res.ok) {
@@ -103,13 +106,17 @@ export default function CustomersPage() {
         setCustomers(data.customers || [])
         setTotal(data.total || 0)
       }
-    } catch (error) {
-      console.error('Error:', error)
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'AbortError') return // stale request, ignore
       toast.error('加载客户列表失败，请重试')
     } finally {
       setLoading(false)
     }
-  }
+  }, [page, search, status, limit])
+
+  useEffect(() => {
+    fetchCustomers()
+  }, [fetchCustomers])
 
   const handleOpenDialog = (customer?: Customer) => {
     if (customer) {
