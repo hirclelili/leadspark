@@ -626,7 +626,20 @@ export default function QuotePage() {
         }
         localStorage.removeItem('leadspark_quote_draft')
       } catch { /* ignore */ }
-    } else {
+    }
+
+    // Pre-select customer passed from customer detail page "新建报价" button
+    const prefillCustomerJson = localStorage.getItem('leadspark_quote_prefill_customer')
+    if (prefillCustomerJson) {
+      try {
+        const prefillCustomer = JSON.parse(prefillCustomerJson) as Customer
+        setSelectedCustomer(prefillCustomer)
+        setCustomerQuery(prefillCustomer.company_name)
+        localStorage.removeItem('leadspark_quote_prefill_customer')
+      } catch { /* ignore */ }
+    }
+
+    if (!draftJson) {
       // Restore auto-saved calculator params (but not when loading a draft)
       const savedParams = localStorage.getItem('leadspark_calc_params')
       if (savedParams) {
@@ -653,7 +666,7 @@ export default function QuotePage() {
         } catch { /* ignore */ }
       }
     }
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-save calculator params to localStorage
   useEffect(() => {
@@ -1095,17 +1108,26 @@ export default function QuotePage() {
               : null,
           quote_mode: quoteLayoutMode,
           quote_snapshot,
+          status: 'draft',
         }),
       })
 
       const savedQuote = await saveRes.json()
       if (!saveRes.ok) throw new Error(savedQuote.error || '保存报价失败')
 
+      // Update customer status to "quoted" — fire and handle error gracefully
       if (selectedCustomer) {
-        await fetch(`/api/customers/${customerId}`, {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...selectedCustomer, status: 'quoted' }),
-        })
+        try {
+          const customerRes = await fetch(`/api/customers/${customerId}`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...selectedCustomer, status: 'quoted' }),
+          })
+          if (!customerRes.ok) {
+            console.warn('客户状态更新失败，但报价已保存成功')
+          }
+        } catch {
+          console.warn('客户状态更新请求失败，但报价已保存成功')
+        }
       }
 
       const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })

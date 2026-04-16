@@ -16,14 +16,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { QUOTE_STATUS_CONFIG, formatDate } from '@/lib/format'
 
-const STATUS_CONFIG = {
-  draft:       { label: '草稿',   color: 'bg-gray-100 text-gray-500' },
-  sent:        { label: '已发送', color: 'bg-blue-100 text-blue-600' },
-  negotiating: { label: '议价中', color: 'bg-yellow-100 text-yellow-600' },
-  won:         { label: '已成交', color: 'bg-green-100 text-green-700' },
-  lost:        { label: '已流失', color: 'bg-red-100 text-red-500' },
-} as const
+const STATUS_CONFIG = QUOTE_STATUS_CONFIG
 type QuoteStatus = keyof typeof STATUS_CONFIG
 
 interface Quotation {
@@ -266,7 +261,7 @@ export default function QuoteHistoryPage() {
                           </span>
                         )}
                         <span className="text-xs text-gray-400">
-                          {new Date(q.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
+                          {formatDate(q.created_at)}
                         </span>
                       </div>
                       {/* Customer */}

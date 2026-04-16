@@ -7,6 +7,7 @@ import {
   MessageSquare, Loader2, Plus, Edit, Trash2, Sparkles, ClipboardCopy
 } from 'lucide-react'
 import { useUserProfile } from '@/contexts/UserProfileContext'
+import { formatDate } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -267,10 +268,6 @@ export default function CustomerDetailPage() {
     }
   }
 
-  const formatDate = (iso: string) => {
-    return new Date(iso).toLocaleDateString('zh-CN')
-  }
-
   const formatPrice = (price: number, currency: string) => {
     const symbols: Record<string, string> = {
       USD: '$',
@@ -496,7 +493,7 @@ export default function CustomerDetailPage() {
 
         {/* Quotation Timeline */}
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
             <CardTitle className="flex items-center gap-2">
               <FileText className="w-5 h-5" />
               报价记录
@@ -504,6 +501,31 @@ export default function CustomerDetailPage() {
                 ({quotations.length})
               </span>
             </CardTitle>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1"
+              onClick={() => {
+                if (customer) {
+                  localStorage.setItem('leadspark_quote_prefill_customer', JSON.stringify({
+                    id: customer.id,
+                    company_name: customer.company_name,
+                    contact_name: customer.contact_name,
+                    address: customer.address,
+                    email: customer.email,
+                    phone: customer.phone,
+                    country: customer.country,
+                    status: customer.status,
+                    notes: customer.notes,
+                    created_at: customer.created_at,
+                  }))
+                }
+                router.push('/quote')
+              }}
+            >
+              <Plus className="w-3.5 h-3.5" />
+              新建报价
+            </Button>
           </CardHeader>
           <CardContent>
             {quotations.length === 0 ? (

@@ -23,14 +23,9 @@ import type { DocumentKind, QuoteLayoutMode } from '@/components/pdf/QuotationPD
 import { AiSidePanel } from '@/components/AiSidePanel'
 import { exportQuoteExcel } from '@/lib/exportQuoteExcel'
 import { useUserProfile } from '@/contexts/UserProfileContext'
+import { QUOTE_STATUS_CONFIG, formatDate } from '@/lib/format'
 
-const STATUS_CONFIG = {
-  draft:       { label: '草稿',   color: 'bg-gray-100 text-gray-600' },
-  sent:        { label: '已发送', color: 'bg-blue-100 text-blue-700' },
-  negotiating: { label: '议价中', color: 'bg-yellow-100 text-yellow-700' },
-  won:         { label: '已成交', color: 'bg-green-100 text-green-700' },
-  lost:        { label: '已流失', color: 'bg-red-100 text-red-600' },
-} as const
+const STATUS_CONFIG = QUOTE_STATUS_CONFIG
 type QuoteStatus = keyof typeof STATUS_CONFIG
 
 interface QuotationDetail {
@@ -514,9 +509,7 @@ export default function QuotationDetailPage() {
         <div>
           <h1 className="text-2xl font-bold font-mono">{quotation.quotation_number}</h1>
           <p className="text-gray-500 text-sm mt-1">
-            {new Date(quotation.created_at).toLocaleDateString('zh-CN', {
-              year: 'numeric', month: 'long', day: 'numeric',
-            })}
+            {formatDate(quotation.created_at)}
           </p>
         </div>
         <div className="flex items-center gap-2">

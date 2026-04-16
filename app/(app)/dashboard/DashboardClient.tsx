@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { Calculator, Package, Users, Building2, TrendingUp, FileText, ArrowRight } from 'lucide-react'
+import { formatDateShort } from '@/lib/format'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import {
@@ -53,14 +54,6 @@ export function DashboardClient({
   monthlyData,
   quotesByStatus,
 }: DashboardClientProps) {
-  const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr)
-    return date.toLocaleString('zh-CN', {
-      month: 'short',
-      day: 'numeric',
-    })
-  }
-
   const hasChartData = monthlyData.some((d) => d.total > 0)
 
   return (
@@ -284,7 +277,7 @@ export function DashboardClient({
                       {quote.currency} {quote.total_amount_foreign?.toFixed(2)}
                     </span>
                     <span className="text-xs text-gray-400">
-                      {formatDate(quote.created_at)}
+                      {formatDateShort(quote.created_at)}
                     </span>
                   </div>
                 </div>
