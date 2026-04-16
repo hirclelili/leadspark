@@ -270,7 +270,7 @@ export default function QuoteHistoryPage() {
                         </span>
                       </div>
                       {/* Customer */}
-                      <div className="text-sm text-gray-700 font-medium">
+                      <div className="text-sm text-gray-700 font-medium truncate">
                         {q.customers?.company_name || (
                           <span className="text-gray-400 font-normal">未关联客户</span>
                         )}

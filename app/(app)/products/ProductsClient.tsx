@@ -334,22 +334,25 @@ export function ProductsClient() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b text-left text-sm text-gray-500">
-                    <th className="py-3 px-4">产品名称</th>
-                    <th className="py-3 px-4">型号</th>
-                    <th className="py-3 px-4">成本价 (CNY)</th>
-                    <th className="py-3 px-4">单位</th>
-                    <th className="py-3 px-4">分类</th>
-                    <th className="py-3 px-4">操作</th>
+                    <th className="py-3 px-4 w-[30%]">产品名称</th>
+                    <th className="py-3 px-4 w-[20%]">型号</th>
+                    <th className="py-3 px-4 w-[15%]">成本价 (CNY)</th>
+                    <th className="py-3 px-4 w-[10%]">单位</th>
+                    <th className="py-3 px-4 w-[15%]">分类</th>
+                    <th className="py-3 px-4 w-[10%]">操作</th>
                   </tr>
                 </thead>
                 <tbody>
                   {products.map((product) => (
                     <tr key={product.id} className="border-b hover:bg-gray-50">
-                      <td className="py-3 px-4 font-medium">
-                        {product.name}
+                      <td className="py-3 px-4 font-medium max-w-0">
+                        <div className="truncate" title={product.name}>{product.name}</div>
+                        {product.specs && (
+                          <div className="truncate text-xs text-gray-400 mt-0.5" title={product.specs}>{product.specs}</div>
+                        )}
                       </td>
-                      <td className="py-3 px-4 text-gray-500">
-                        {product.model || '-'}
+                      <td className="py-3 px-4 text-gray-500 max-w-0">
+                        <div className="truncate" title={product.model || ''}>{product.model || '-'}</div>
                       </td>
                       <td className="py-3 px-4">
                         ¥{Number(product.cost_price).toFixed(2)}

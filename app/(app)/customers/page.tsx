@@ -401,11 +401,11 @@ export default function CustomersPage() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b text-left text-sm text-gray-500">
-                    <th className="py-3 px-4">公司名称</th>
-                    <th className="py-3 px-4">联系人</th>
-                    <th className="py-3 px-4">国家</th>
-                    <th className="py-3 px-4">状态</th>
-                    <th className="py-3 px-4">操作</th>
+                    <th className="py-3 px-4 w-[35%]">公司名称</th>
+                    <th className="py-3 px-4 w-[20%]">联系人</th>
+                    <th className="py-3 px-4 w-[15%]">国家</th>
+                    <th className="py-3 px-4 w-[15%]">状态</th>
+                    <th className="py-3 px-4 w-[15%]">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -415,14 +415,14 @@ export default function CustomersPage() {
                       className="border-b hover:bg-gray-50 cursor-pointer"
                       onClick={() => router.push(`/customers/${customer.id}`)}
                     >
-                      <td className="py-3 px-4 font-medium">
-                        {customer.company_name}
+                      <td className="py-3 px-4 font-medium max-w-0">
+                        <div className="truncate" title={customer.company_name}>{customer.company_name}</div>
                       </td>
-                      <td className="py-3 px-4 text-gray-500">
-                        {customer.contact_name || '-'}
+                      <td className="py-3 px-4 text-gray-500 max-w-0">
+                        <div className="truncate" title={customer.contact_name || ''}>{customer.contact_name || '-'}</div>
                       </td>
-                      <td className="py-3 px-4 text-gray-500">
-                        {customer.country || '-'}
+                      <td className="py-3 px-4 text-gray-500 max-w-0">
+                        <div className="truncate">{customer.country || '-'}</div>
                       </td>
                       <td className="py-3 px-4">
                         <span

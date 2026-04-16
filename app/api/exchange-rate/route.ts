@@ -70,21 +70,23 @@ export async function POST(request: Request) {
         warning: 'stale cache',
       })
     }
-    // Hard-coded fallback rates
+    // Hard-coded fallback rates (last reviewed: 2026-04)
+    // Used only when live API is down AND no stale cache is available.
+    // 1 CNY → X foreign currency (based on USD/CNY ≈ 7.28)
     const fallback: Record<string, number> = {
-      USD: 0.1380,
-      EUR: 0.1270,
-      GBP: 0.1090,
-      JPY: 20.8,
-      AUD: 0.2140,
-      CAD: 0.1900,
-      AED: 0.5070,
-      SGD: 0.1860,
-      HKD: 1.09,
+      USD: 0.1374,  // 1/7.28
+      EUR: 0.1272,  // USD/CNY ÷ EUR/USD(1.08)
+      GBP: 0.1082,  // USD/CNY ÷ GBP/USD(1.27)
+      JPY: 20.72,   // USD/CNY × USD/JPY(150.8)
+      AUD: 0.2178,  // USD/CNY ÷ AUD/USD(0.631)
+      CAD: 0.1916,  // USD/CNY ÷ CAD/USD(0.717)
+      AED: 0.5048,  // AED fixed ~3.67/USD
+      SGD: 0.1840,  // USD/CNY ÷ SGD/USD(0.747)
+      HKD: 1.074,   // HKD fixed ~7.78/USD
       CNY: 1,
     }
     return NextResponse.json({
-      rate: fallback[targetCurrency] ?? 0.138,
+      rate: fallback[targetCurrency] ?? 0.1374,
       from: 'CNY',
       to: targetCurrency,
       updatedAt: new Date().toISOString(),
