@@ -1604,10 +1604,19 @@ export default function QuotePage() {
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="margin">按期望利润率 (%)</SelectItem>
-                  <SelectItem value="order_markup_pct">整单统一加价 (%)</SelectItem>
-                  <SelectItem value="order_markup_fixed">整单固定加价 (¥) 分摊到各行，并可再加利润率</SelectItem>
+                <SelectContent className="max-w-xs">
+                  <SelectItem value="margin">
+                    <div>按期望利润率 (%)</div>
+                    <div className="text-xs text-gray-400">工厂价 × (1 + 利润率%) = 对客价</div>
+                  </SelectItem>
+                  <SelectItem value="order_markup_pct">
+                    <div>整单统一加价 (%)</div>
+                    <div className="text-xs text-gray-400">在利润率基础上额外提高整单售价百分比</div>
+                  </SelectItem>
+                  <SelectItem value="order_markup_fixed">
+                    <div>固定金额加价 (¥) 分摊各行</div>
+                    <div className="text-xs text-gray-400">整单固定附加费按工厂价比例摊入成本，再加利润率</div>
+                  </SelectItem>
                 </SelectContent>
               </Select>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
