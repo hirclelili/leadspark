@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useMemo, useRef } from 'react'
-import { Calculator, ChevronDown, ChevronUp, Loader2, RefreshCw, FileText, Search, ArrowLeft, Plus, X, Package, Sparkles } from 'lucide-react'
+import { Calculator, ChevronDown, Loader2, RefreshCw, FileText, Search, ArrowLeft, Plus, X, Package, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { AiSidePanel } from '@/components/AiSidePanel'
 import { Button } from '@/components/ui/button'
@@ -425,7 +425,7 @@ export default function QuotePage() {
   const [showLCLFCL, setShowLCLFCL] = useState(false)
   const [lclData, setLclData] = useState({ quantity: '500', freight: '800' })
   const [fclData, setFclData] = useState({ quantity: '2000', freight: '1500' })
-  const [showDetail, setShowDetail] = useState(false)
+
   /** 物流报价区块展示的贸易术语（不含 EXW） */
   const [visibleLogisticsTerms, setVisibleLogisticsTerms] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {}
@@ -1606,16 +1606,12 @@ export default function QuotePage() {
                 </SelectTrigger>
                 <SelectContent className="max-w-xs">
                   <SelectItem value="margin">
-                    <div>按期望利润率 (%)</div>
-                    <div className="text-xs text-gray-400">工厂价 × (1 + 利润率%) = 对客价</div>
-                  </SelectItem>
-                  <SelectItem value="order_markup_pct">
-                    <div>整单统一加价 (%)</div>
-                    <div className="text-xs text-gray-400">在利润率基础上额外提高整单售价百分比</div>
+                    <div>按利润率</div>
+                    <div className="text-xs text-gray-400">对客价 = 工厂价 × (1 + 利润率%)</div>
                   </SelectItem>
                   <SelectItem value="order_markup_fixed">
-                    <div>固定金额加价 (¥) 分摊各行</div>
-                    <div className="text-xs text-gray-400">整单固定附加费按工厂价比例摊入成本，再加利润率</div>
+                    <div>固定附加费 (¥) + 利润率</div>
+                    <div className="text-xs text-gray-400">整单固定费用（如开模费）按比例摊入各行成本，再加利润率</div>
                   </SelectItem>
                 </SelectContent>
               </Select>
@@ -1631,17 +1627,7 @@ export default function QuotePage() {
                     />
                   </div>
                 )}
-                {formData.pricingMode === 'order_markup_pct' && (
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium text-gray-600">整单统一加价 (%)</label>
-                    <Input
-                      type="number"
-                      value={formData.orderMarkupPercent}
-                      onChange={(e) => setFormData({ ...formData, orderMarkupPercent: e.target.value })}
-                      placeholder="8"
-                    />
-                  </div>
-                )}
+
                 {formData.pricingMode === 'order_markup_fixed' && (
                   <>
                     <div className="space-y-2">
@@ -1909,59 +1895,6 @@ export default function QuotePage() {
               )}
             </div>
 
-            {multiResultsFactory &&
-              calcProducts.filter((p) => parseFloat(p.costPrice) > 0).length >= 2 && (
-                <div className="border rounded-lg p-3 bg-gray-50/50">
-                  <button
-                    type="button"
-                    onClick={() => setShowDetail((v) => !v)}
-                    className="flex items-center gap-2 text-sm font-medium text-gray-700 w-full"
-                  >
-                    {showDetail ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                    按产品明细
-                  </button>
-                  {showDetail && (
-                    <div className="mt-3 space-y-2">
-                      {multiResultsFactory.byProduct.map(({ productId, results }) => {
-                        const calc = calcProducts.find((p) => p.id === productId)
-                        if (!calc) return null
-                        const r = results.find((r) => r.term === OUTPUT_TRADE_TERM)
-                        if (!r) return null
-                        const qty = parseFloat(calc.quantity) || 1
-                        return (
-                          <div
-                            key={productId}
-                            className="flex items-center justify-between text-xs text-gray-700 bg-white rounded px-3 py-2 border"
-                          >
-                            <span className="font-medium">
-                              {calc.name || '产品'}
-                              {calc.model ? ` (${calc.model})` : ''}
-                            </span>
-                            <span className="text-gray-500">
-                              {sym}
-                              {formatPrice(r.priceForeign)}/{calc.unit} × {qty} ={' '}
-                              <span className="font-semibold text-blue-700">
-                                {sym}
-                                {(r.priceForeign * qty).toFixed(2)}
-                              </span>
-                            </span>
-                          </div>
-                        )
-                      })}
-                      <div className="flex justify-between text-xs font-bold border-t pt-2 px-3">
-                        <span>合计</span>
-                        <span className="text-blue-700">
-                          {sym}
-                          {(
-                            multiResultsFactory.orderTotals.find((r) => r.term === OUTPUT_TRADE_TERM)
-                              ?.priceForeign || 0
-                          ).toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
           </CardContent>
         </Card>
 
