@@ -236,7 +236,7 @@ export function SettingsClient() {
   }
 
   return (
-    <div className="p-8 pt-16 md:pt-8 max-w-3xl space-y-6">
+    <div className="p-8 pt-16 md:pt-8 max-w-4xl mx-auto space-y-6">
 
       {/* Header */}
       <div className="flex items-center justify-between">
