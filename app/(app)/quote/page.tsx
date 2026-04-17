@@ -411,6 +411,8 @@ export default function QuotePage() {
     { id: crypto.randomUUID(), name: '', model: '', unit: 'pc', costPrice: '', quantity: '100', quoteUnitCny: '' },
   ])
   const [productPickerRowId, setProductPickerRowId] = useState<string | null>(null)
+  // 'calc' = picking for ② calculator row; 'pdf' = picking for ③ doc row
+  const [productPickerTarget, setProductPickerTarget] = useState<'calc' | 'pdf'>('calc')
   const [formData, setFormData] = useState({
     domesticCost: '0',
     freight: '0',
@@ -858,13 +860,25 @@ export default function QuotePage() {
 
   const handleLibraryProductSelect = (product: LibraryProduct) => {
     if (!productPickerRowId) return
-    setCalcProducts((prev) =>
-      prev.map((row) =>
-        row.id === productPickerRowId
-          ? { ...row, name: product.name, model: product.model || '', costPrice: String(product.cost_price), unit: product.unit || 'pc' }
-          : row
+    if (productPickerTarget === 'calc') {
+      setCalcProducts((prev) =>
+        prev.map((row) =>
+          row.id === productPickerRowId
+            ? { ...row, name: product.name, model: product.model || '', costPrice: String(product.cost_price), unit: product.unit || 'pc' }
+            : row
+        )
       )
-    )
+    } else {
+      // pdf target — rowId is the row's unique key (idx as string)
+      const idx = parseInt(productPickerRowId, 10)
+      setPdfProducts((prev) =>
+        prev.map((row, i) =>
+          i === idx
+            ? { ...row, name: product.name, model: product.model || '', unit: product.unit || 'pc', specs: product.specs || '' }
+            : row
+        )
+      )
+    }
     setProductPickerRowId(null)
   }
 
@@ -1898,12 +1912,12 @@ export default function QuotePage() {
           </CardContent>
         </Card>
 
-        {/* ③ PDF 明细行：在填物流前确认列表/货柜分组，便于与海运与术语报价对齐 */}
+        {/* ③ 单据产品行：控制最终 PDF/Excel 上显示的内容 */}
         <Card>
           <CardContent className="p-6 space-y-3">
-            {stepTitle(3, 'PDF 明细行（列表或按货柜）')}
+            {stepTitle(3, '单据产品行')}
             <p className="text-xs text-gray-500">
-              与 ② 中产品行一一对应；若按货柜分组，建议先在此标好柜型/分组，再填下方物流费用，思路更顺。
+              控制报价单/PI/PL 上打印的产品列表。名称、规格、数量可与上方计算器不同（如合并展示、自定义排序）。若按货柜分组，建议先在此标好柜型，再填下方物流费用。
             </p>
             {!multiResultsFactory ? (
               <p className="text-xs text-gray-400">请先完成 ② 产品与算价中的有效成本与数量。</p>
@@ -1972,7 +1986,7 @@ export default function QuotePage() {
                     <tbody>
                       {pdfProducts.map((row, idx) =>
                         row.isContainerHeader ? (
-                          <tr key={idx} className="border-t bg-amber-50/80">
+                          <tr key={idx} className="border-t bg-amber-50/80 group">
                             <td className="p-1" colSpan={4}>
                               <input
                                 className="w-full text-xs border border-amber-200 rounded px-1 py-0.5 focus:outline-blue-400 font-medium"
@@ -1985,31 +1999,63 @@ export default function QuotePage() {
                                 placeholder="货柜 / 分组标题（如 1×40HQ）"
                               />
                             </td>
-                            <td className="p-1 text-center">
-                              {pdfProducts.length > 1 && (
+                            <td className="p-1">
+                              <div className="flex items-center justify-center gap-1">
                                 <button
                                   type="button"
+                                  title="在上方插入产品行"
+                                  className="opacity-0 group-hover:opacity-100 text-blue-400 hover:text-blue-600 text-xs px-1"
+                                  onClick={() => {
+                                    const u = [...pdfProducts]
+                                    u.splice(idx, 0, emptyProductPdfRow(selectedTradeResult?.priceForeign || 0))
+                                    setPdfProducts(u)
+                                  }}
+                                >↑+</button>
+                                <button
+                                  type="button"
+                                  title="在下方插入产品行"
+                                  className="opacity-0 group-hover:opacity-100 text-blue-400 hover:text-blue-600 text-xs px-1"
+                                  onClick={() => {
+                                    const u = [...pdfProducts]
+                                    u.splice(idx + 1, 0, emptyProductPdfRow(selectedTradeResult?.priceForeign || 0))
+                                    setPdfProducts(u)
+                                  }}
+                                >↓+</button>
+                                <button
+                                  type="button"
+                                  title="删除此行"
                                   className="text-red-400 hover:text-red-600"
                                   onClick={() => setPdfProducts((prev) => prev.filter((_, i) => i !== idx))}
-                                >
-                                  ×
-                                </button>
-                              )}
+                                >×</button>
+                              </div>
                             </td>
                           </tr>
                         ) : (
-                          <tr key={idx} className="border-t">
+                          <tr key={idx} className="border-t group">
                             <td className="p-1">
-                              <input
-                                className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
-                                value={row.name}
-                                onChange={(e) => {
-                                  const u = [...pdfProducts]
-                                  u[idx] = { ...u[idx], name: e.target.value }
-                                  setPdfProducts(u)
-                                }}
-                                placeholder="产品名称"
-                              />
+                              <div className="flex items-center gap-0.5">
+                                <button
+                                  type="button"
+                                  title="从产品库选择"
+                                  onClick={() => {
+                                    setProductPickerTarget('pdf')
+                                    setProductPickerRowId(String(idx))
+                                  }}
+                                  className="flex-shrink-0 p-0.5 rounded hover:bg-gray-100 text-gray-300 hover:text-blue-600"
+                                >
+                                  <Package className="w-3.5 h-3.5" />
+                                </button>
+                                <input
+                                  className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
+                                  value={row.name}
+                                  onChange={(e) => {
+                                    const u = [...pdfProducts]
+                                    u[idx] = { ...u[idx], name: e.target.value }
+                                    setPdfProducts(u)
+                                  }}
+                                  placeholder="产品名称"
+                                />
+                              </div>
                             </td>
                             <td className="p-1">
                               <input
@@ -2019,11 +2065,7 @@ export default function QuotePage() {
                                 onChange={(e) => {
                                   const qty = parseFloat(e.target.value) || 1
                                   const u = [...pdfProducts]
-                                  u[idx] = {
-                                    ...u[idx],
-                                    qty,
-                                    amount_foreign: qty * u[idx].unit_price_foreign,
-                                  }
+                                  u[idx] = { ...u[idx], qty, amount_foreign: qty * u[idx].unit_price_foreign }
                                   setPdfProducts(u)
                                 }}
                               />
@@ -2036,29 +2078,43 @@ export default function QuotePage() {
                                 onChange={(e) => {
                                   const price = parseFloat(e.target.value) || 0
                                   const u = [...pdfProducts]
-                                  u[idx] = {
-                                    ...u[idx],
-                                    unit_price_foreign: price,
-                                    amount_foreign: price * u[idx].qty,
-                                  }
+                                  u[idx] = { ...u[idx], unit_price_foreign: price, amount_foreign: price * u[idx].qty }
                                   setPdfProducts(u)
                                 }}
                               />
                             </td>
                             <td className="p-2 text-right font-medium">
-                              {sym}
-                              {row.amount_foreign.toFixed(2)}
+                              {sym}{row.amount_foreign.toFixed(2)}
                             </td>
-                            <td className="p-1 text-center">
-                              {pdfProducts.length > 1 && (
+                            <td className="p-1">
+                              <div className="flex items-center justify-center gap-1">
                                 <button
                                   type="button"
+                                  title="在上方插入行"
+                                  className="opacity-0 group-hover:opacity-100 text-blue-400 hover:text-blue-600 text-xs px-1"
+                                  onClick={() => {
+                                    const u = [...pdfProducts]
+                                    u.splice(idx, 0, emptyProductPdfRow(selectedTradeResult?.priceForeign || 0))
+                                    setPdfProducts(u)
+                                  }}
+                                >↑+</button>
+                                <button
+                                  type="button"
+                                  title="在下方插入行"
+                                  className="opacity-0 group-hover:opacity-100 text-blue-400 hover:text-blue-600 text-xs px-1"
+                                  onClick={() => {
+                                    const u = [...pdfProducts]
+                                    u.splice(idx + 1, 0, emptyProductPdfRow(selectedTradeResult?.priceForeign || 0))
+                                    setPdfProducts(u)
+                                  }}
+                                >↓+</button>
+                                <button
+                                  type="button"
+                                  title="删除此行"
                                   className="text-red-400 hover:text-red-600"
                                   onClick={() => setPdfProducts((prev) => prev.filter((_, i) => i !== idx))}
-                                >
-                                  ×
-                                </button>
-                              )}
+                                >×</button>
+                              </div>
                             </td>
                           </tr>
                         )
