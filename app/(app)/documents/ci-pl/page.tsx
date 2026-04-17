@@ -260,7 +260,9 @@ export default function CiPlPage() {
       address: userProfile?.address as string | undefined,
       phone: userProfile?.phone as string | undefined,
       email: userProfile?.email as string | undefined,
-      logoUrl: userProfile?.logo_url as string | undefined,
+      logoUrl: (userProfile?.logo_url && /^https?:\/\//i.test(userProfile.logo_url))
+        ? userProfile.logo_url
+        : undefined,
       bankName: userProfile?.bank_name as string | undefined,
       bankAccount: userProfile?.bank_account as string | undefined,
       bankSwift: userProfile?.bank_swift as string | undefined,
@@ -324,10 +326,6 @@ export default function CiPlPage() {
       const { pdf } = await import('@react-pdf/renderer')
       const { CiPlPDF } = await import('@/components/pdf/CiPlPDF')
       const props = buildProps(c, mode)
-      // react-pdf can only load absolute http/https URLs for images; strip others
-      if (props.logoUrl && !/^https?:\/\//i.test(props.logoUrl)) {
-        props.logoUrl = undefined
-      }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const blob = await pdf(React.createElement(CiPlPDF, props as any) as any).toBlob()
       const base = (c.containerNumber || `Container`).replace(/[/\\?%*:|"<>]/g, '-')
@@ -353,10 +351,6 @@ export default function CiPlPage() {
       for (let i = 0; i < valid.length; i++) {
         const c = valid[i]
         const props = buildProps(c, mode)
-        // react-pdf can only load absolute http/https URLs for images; strip others
-        if (props.logoUrl && !/^https?:\/\//i.test(props.logoUrl)) {
-          props.logoUrl = undefined
-        }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const blob = await pdf(React.createElement(CiPlPDF, props as any) as any).toBlob()
         const base = (c.containerNumber || `Container-${i + 1}`).replace(/[/\\?%*:|"<>]/g, '-')

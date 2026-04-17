@@ -179,7 +179,7 @@ export default function CustomerDetailPage() {
         toast.success('添加成功')
       }
     } catch (error) {
-      console.error('Error:', error)
+      toast.error(error instanceof Error ? error.message : '添加失败，请重试')
     } finally {
       setAddingRemark(false)
     }

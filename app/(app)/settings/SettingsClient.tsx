@@ -161,6 +161,10 @@ export function SettingsClient() {
   }
 
   const handleSave = async () => {
+    if (!formData.company_name?.trim()) {
+      toast.error('公司名称（英文）不能为空')
+      return
+    }
     setSaving(true)
     try {
       const res = await fetch('/api/user-profile', {

@@ -19,7 +19,13 @@ export async function GET(
       .eq('user_id', user.id)
       .single()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return NextResponse.json({ error: '报价单不存在' }, { status: 404 })
+      }
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
+    if (!data) return NextResponse.json({ error: '报价单不存在' }, { status: 404 })
 
     return NextResponse.json(data)
   } catch (error: any) {
