@@ -144,19 +144,53 @@ export function SettingsClient() {
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+
+    // Basic client-side size check (2 MB)
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('图片不能超过 2 MB')
+      return
+    }
+
     setUploading(true)
     try {
-      const fileExt = file.name.split('.').pop()
+      const fileExt = file.name.split('.').pop()?.toLowerCase() || 'png'
       const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`
-      const { error: uploadError } = await supabase.storage.from('logos').upload(fileName, file)
-      if (uploadError) { toast.error('上传失败: ' + uploadError.message); return }
+
+      const { error: uploadError } = await supabase.storage.from('logos').upload(fileName, file, {
+        upsert: false,
+        contentType: file.type,
+      })
+      if (uploadError) {
+        toast.error('上传失败: ' + uploadError.message)
+        return
+      }
+
       const { data: urlData } = supabase.storage.from('logos').getPublicUrl(fileName)
-      setFormData(f => ({ ...f, logo_url: urlData.publicUrl }))
-      toast.success('Logo 上传成功')
+      const publicUrl = urlData.publicUrl
+
+      // Immediately persist the new logo URL to the database — don't rely on user clicking 保存
+      const updatedFormData = { ...formData, logo_url: publicUrl }
+      setFormData(updatedFormData)
+
+      const res = await fetch('/api/user-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedFormData),
+      })
+      if (!res.ok) {
+        toast.warning('Logo 已上传，但自动保存失败，请手动点击「保存」')
+      } else {
+        const saved = await res.json()
+        setProfile(saved)
+        await refreshProfile()
+        toast.success('Logo 已上传并保存')
+      }
     } catch (err) {
-      toast.error('上传失败')
+      toast.error('上传失败，请检查网络连接')
     } finally {
       setUploading(false)
+      // Reset input so same file can be re-selected
+      if (logoInputRef.current) logoInputRef.current.value = ''
     }
   }
 
@@ -308,7 +342,10 @@ export function SettingsClient() {
 
           {/* Defaults */}
           <div className="border-t pt-4">
-            <div className="text-sm font-medium text-gray-600 mb-3">报价单默认值</div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-sm font-medium text-gray-600">报价单默认值</div>
+              <div className="text-xs text-gray-400">每次新建报价单时自动填入</div>
+            </div>
             {editing ? (
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                 <div className="space-y-1.5">
