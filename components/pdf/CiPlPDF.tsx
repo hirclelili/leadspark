@@ -12,8 +12,18 @@ import {
   View,
   StyleSheet,
   Image,
+  Font,
 } from '@react-pdf/renderer'
 import { amountInWordsEn } from '@/lib/amountInWords'
+
+Font.register({
+  family: 'NotoSansSC',
+  fonts: [
+    { src: 'https://fonts.gstatic.com/s/notosanssc/v40/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYw.ttf', fontWeight: 400 },
+    { src: 'https://fonts.gstatic.com/s/notosanssc/v40/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaGzjCnYw.ttf', fontWeight: 700 },
+  ],
+})
+Font.registerHyphenationCallback((word) => [word])
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -87,7 +97,7 @@ const S = StyleSheet.create({
   page: {
     padding: 28,
     fontSize: 8,
-    fontFamily: 'Helvetica',
+    fontFamily: 'NotoSansSC',
     color: '#111',
   },
   // ── Header ──
@@ -107,7 +117,7 @@ const S = StyleSheet.create({
   },
   companyName: {
     fontSize: 13,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC', fontWeight: 700,
     marginBottom: 2,
   },
   companyInfo: {
@@ -121,7 +131,7 @@ const S = StyleSheet.create({
   },
   docTitle: {
     fontSize: 16,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC', fontWeight: 700,
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
@@ -151,7 +161,7 @@ const S = StyleSheet.create({
     width: 90,
     fontSize: 7.5,
     color: '#555',
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC', fontWeight: 700,
   },
   infoValue: {
     flex: 1,
@@ -169,7 +179,7 @@ const S = StyleSheet.create({
   },
   th: {
     fontSize: 7,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC', fontWeight: 700,
     color: '#fff',
     textAlign: 'center',
   },
@@ -214,13 +224,13 @@ const S = StyleSheet.create({
   },
   totalsTd: {
     fontSize: 7.5,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC', fontWeight: 700,
     textAlign: 'center',
   },
   // ── Bottom sections ──
   amountWords: {
     fontSize: 8,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC', fontWeight: 700,
     marginBottom: 6,
     padding: 5,
     backgroundColor: '#f5f5f5',
@@ -235,7 +245,7 @@ const S = StyleSheet.create({
   },
   bankTitle: {
     fontSize: 8,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC', fontWeight: 700,
     marginBottom: 4,
     textTransform: 'uppercase',
   },
@@ -261,7 +271,7 @@ const S = StyleSheet.create({
   },
   remarksTitle: {
     fontSize: 7.5,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC', fontWeight: 700,
     marginBottom: 2,
   },
   remarksText: {
@@ -423,7 +433,7 @@ export function CiPlPDF(props: CiPlPDFProps) {
       return (
         <View key={idx} style={S.trHeader}>
           {cols.map((col) => (
-            <Text key={col.key} style={[S.td, { width: col.width, fontFamily: 'Helvetica-Bold', fontSize: 7.5 }]}>
+            <Text key={col.key} style={[S.td, { width: col.width, fontFamily: 'NotoSansSC', fontWeight: 700, fontSize: 7.5 }]}>
               {col.key === 'sn' ? '' : col.key === 'desc' || col.key === 'model' ? p.name : ''}
             </Text>
           ))}

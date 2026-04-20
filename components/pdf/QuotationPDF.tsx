@@ -10,13 +10,13 @@ import {
 } from '@react-pdf/renderer'
 import { amountInWordsEn } from '@/lib/amountInWords'
 
-// Register NotoSansSC for full CJK (Chinese) character support.
-// Fonts are served from /public/fonts/ at runtime.
+// Register NotoSansSC for CJK support — loaded from Google Fonts CDN at render time.
+// PDF generation runs in the browser, so the CDN fetch is cached after first use.
 Font.register({
   family: 'NotoSansSC',
   fonts: [
-    { src: '/fonts/NotoSansSC-Regular.ttf', fontWeight: 400 },
-    { src: '/fonts/NotoSansSC-Bold.ttf', fontWeight: 700 },
+    { src: 'https://fonts.gstatic.com/s/notosanssc/v40/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYw.ttf', fontWeight: 400 },
+    { src: 'https://fonts.gstatic.com/s/notosanssc/v40/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaGzjCnYw.ttf', fontWeight: 700 },
   ],
 })
 
