@@ -25,6 +25,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from '@/components/ui/dialog'
+import { Checkbox } from '@/components/ui/checkbox'
 import { CURRENCY_OPTIONS, getCurrencySymbol } from '@/lib/currencies'
 import type { ParsedPackingRow } from '@/lib/packingExcelParse'
 import { exportCiPlExcel } from '@/lib/exportCiPlExcel'
@@ -135,6 +144,88 @@ export default function CiPlPage() {
   const { profile: userProfile, refreshProfile } = useUserProfile()
   const [generating, setGenerating] = useState<string | null>(null)
   const [sharedExpanded, setSharedExpanded] = useState(true)
+
+  // ─── Export dialog ────────────────────────────────────────────────────────
+  const [exportOpen, setExportOpen] = useState(false)
+  const [exportContainerIds, setExportContainerIds] = useState<Set<string>>(new Set())
+  const [exportFormats, setExportFormats] = useState({
+    ciExcel: true, plExcel: true, ciPdf: false, plPdf: false,
+  })
+
+  const openExportDialog = () => {
+    // Pre-select containers that have at least one named product row
+    const valid = containers.filter(c => c.products.some(p => p.name.trim()))
+    setExportContainerIds(new Set(valid.map(c => c.id)))
+    setExportFormats({ ciExcel: true, plExcel: true, ciPdf: false, plPdf: false })
+    setExportOpen(true)
+  }
+
+  const handleBatchExport = async () => {
+    const selected = containers.filter(c => exportContainerIds.has(c.id))
+    if (selected.length === 0) { toast.error('请选择至少一个货柜'); return }
+    const formats = Object.values(exportFormats)
+    if (!formats.some(Boolean)) { toast.error('请选择至少一种导出格式'); return }
+
+    setExportOpen(false)
+    setGenerating('batch')
+
+    try {
+      const { pdf } = exportFormats.ciPdf || exportFormats.plPdf
+        ? await import('@react-pdf/renderer')
+        : { pdf: null as any }
+      const { CiPlPDF } = exportFormats.ciPdf || exportFormats.plPdf
+        ? await import('@/components/pdf/CiPlPDF')
+        : { CiPlPDF: null as any }
+
+      let count = 0
+      for (const c of selected) {
+        const rows = c.products.filter(p => p.name.trim())
+        if (rows.length === 0) continue
+        const base = (c.containerNumber || `Container`).replace(/[/\\?%*:|"<>]/g, '-')
+
+        if (exportFormats.plExcel) {
+          await exportCiPlExcel({ ...buildProps(c, 'PL'), products: rows.map(toExcelRow) })
+          count++
+        }
+        if (exportFormats.ciExcel) {
+          await exportCiPlExcel({ ...buildProps(c, 'CI'), products: rows.map(toExcelRow) })
+          count++
+        }
+        if (exportFormats.plPdf && pdf && CiPlPDF) {
+          const blob = await pdf(React.createElement(CiPlPDF, buildProps(c, 'PL') as any) as any).toBlob()
+          await delay(count * 300)
+          triggerDownload(blob, `${base}-PL.pdf`)
+          count++
+        }
+        if (exportFormats.ciPdf && pdf && CiPlPDF) {
+          const blob = await pdf(React.createElement(CiPlPDF, buildProps(c, 'CI') as any) as any).toBlob()
+          await delay(count * 300)
+          triggerDownload(blob, `${base}-CI.pdf`)
+          count++
+        }
+      }
+      toast.success(`已导出 ${count} 个文件`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '导出失败')
+      console.error(err)
+    } finally {
+      setGenerating(null)
+    }
+  }
+
+  function delay(ms: number) { return new Promise(r => setTimeout(r, ms)) }
+
+  function toExcelRow(p: CiPlLine) {
+    return {
+      name: p.name, model: p.model || undefined,
+      hs_code: p.hs_code || undefined, size: p.size || undefined,
+      material: p.material || undefined, country_of_origin: p.country_of_origin || undefined,
+      qty: p.qty, unit: p.unit,
+      no_of_packages: p.no_of_packages || undefined, cbm: p.cbm || undefined,
+      nw: p.nw || undefined, gw: p.gw || undefined,
+      unit_price_foreign: p.unit_price_foreign, amount_foreign: p.amount_foreign,
+    }
+  }
 
   const sym = getCurrencySymbol(shared.currency)
 
@@ -314,98 +405,11 @@ export default function CiPlPage() {
     document.body.removeChild(a); URL.revokeObjectURL(url)
   }
 
-  const downloadOne = async (c: ContainerData, mode: 'CI' | 'PL') => {
-    const rows = c.products.filter(p => p.name.trim())
-    if (rows.length === 0) { toast.error('请先添加产品行'); return }
-    if (mode === 'CI' && rows.some(p => (p.unit_price_foreign || 0) <= 0)) {
-      toast.error('CI 需要填写单价'); return
-    }
-    const key = c.id + mode
-    setGenerating(key)
-    try {
-      const { pdf } = await import('@react-pdf/renderer')
-      const { CiPlPDF } = await import('@/components/pdf/CiPlPDF')
-      const props = buildProps(c, mode)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const blob = await pdf(React.createElement(CiPlPDF, props as any) as any).toBlob()
-      const base = (c.containerNumber || `Container`).replace(/[/\\?%*:|"<>]/g, '-')
-      triggerDownload(blob, `${base}-${mode}.pdf`)
-      toast.success(`已生成 ${mode} PDF`)
-    } catch (err) {
-      console.error('PDF generation error:', err)
-      toast.error(err instanceof Error ? err.message : '生成失败，请检查控制台')
-    } finally { setGenerating(null) }
-  }
-
-  const downloadAll = async (mode: 'CI' | 'PL') => {
-    const valid = containers.filter(c => c.products.some(p => p.name.trim()))
-    if (valid.length === 0) { toast.error('请先添加产品'); return }
-    if (mode === 'CI') {
-      const missing = valid.some(c => c.products.filter(p => p.name.trim()).some(p => (p.unit_price_foreign || 0) <= 0))
-      if (missing) { toast.error('所有货柜都需要填写单价才能批量生成 CI'); return }
-    }
-    setGenerating('all' + mode)
-    try {
-      const { pdf } = await import('@react-pdf/renderer')
-      const { CiPlPDF } = await import('@/components/pdf/CiPlPDF')
-      for (let i = 0; i < valid.length; i++) {
-        const c = valid[i]
-        const props = buildProps(c, mode)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const blob = await pdf(React.createElement(CiPlPDF, props as any) as any).toBlob()
-        const base = (c.containerNumber || `Container-${i + 1}`).replace(/[/\\?%*:|"<>]/g, '-')
-        setTimeout(() => triggerDownload(blob, `${base}-${mode}.pdf`), i * 500)
-      }
-      toast.success(`已生成 ${valid.length} 个 ${mode}`)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '生成失败')
-      console.error('PDF generation error:', err)
-    } finally { setGenerating(null) }
-  }
-
-  // ─── Excel export ─────────────────────────────────────────────────────────
-
-  const exportExcel = async (c: ContainerData, mode: 'CI' | 'PL') => {
-    const rows = c.products.filter(p => p.name.trim())
-    if (rows.length === 0) { toast.error('请先添加产品行'); return }
-    const key = c.id + 'XL' + mode
-    setGenerating(key)
-    try {
-      await exportCiPlExcel({
-        ...buildProps(c, mode),
-        products: rows.map(p => ({
-          name: p.name,
-          model: p.model || undefined,
-          hs_code: p.hs_code || undefined,
-          size: p.size || undefined,
-          material: p.material || undefined,
-          country_of_origin: p.country_of_origin || undefined,
-          qty: p.qty,
-          unit: p.unit,
-          no_of_packages: p.no_of_packages || undefined,
-          cbm: p.cbm || undefined,
-          nw: p.nw || undefined,
-          gw: p.gw || undefined,
-          unit_price_foreign: p.unit_price_foreign,
-          amount_foreign: p.amount_foreign,
-        })),
-      })
-      toast.success(`已导出 ${mode} Excel`)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : '导出失败')
-      console.error('Excel export error:', err)
-    } finally { setGenerating(null) }
-  }
-
   // ─── Render container card ────────────────────────────────────────────────
 
   const renderContainer = (c: ContainerData, idx: number) => {
     const itemCount = c.products.filter(p => p.name.trim()).length
     const total = c.products.reduce((s, p) => s + p.amount_foreign, 0)
-    const ciKey    = c.id + 'CI'
-    const plKey    = c.id + 'PL'
-    const xlCiKey  = c.id + 'XLCI'
-    const xlPlKey  = c.id + 'XLPL'
 
     return (
       <Card key={c.id} className="overflow-hidden border-slate-200">
@@ -437,46 +441,6 @@ export default function CiPlPage() {
               {itemCount} 项{total > 0 ? ` · ${sym}${total.toFixed(2)}` : ''}
             </span>
           )}
-          {/* Excel export (primary) */}
-          <Button
-            size="sm" variant="default"
-            className="h-7 px-2.5 text-xs shrink-0 bg-emerald-600 hover:bg-emerald-700"
-            onClick={() => exportExcel(c, 'CI')}
-            disabled={!!generating}
-          >
-            {generating === xlCiKey ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <FileSpreadsheet className="w-3 h-3 mr-1" />}
-            CI
-          </Button>
-          <Button
-            size="sm" variant="default"
-            className="h-7 px-2.5 text-xs shrink-0 bg-emerald-600 hover:bg-emerald-700"
-            onClick={() => exportExcel(c, 'PL')}
-            disabled={!!generating}
-          >
-            {generating === xlPlKey ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <FileSpreadsheet className="w-3 h-3 mr-1" />}
-            PL
-          </Button>
-          {/* PDF export (secondary) */}
-          <Button
-            size="sm" variant="outline"
-            className="h-7 px-2.5 text-xs shrink-0"
-            onClick={() => downloadOne(c, 'CI')}
-            disabled={!!generating}
-            title="生成 CI PDF"
-          >
-            {generating === ciKey ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <FileDown className="w-3 h-3 mr-1" />}
-            CI PDF
-          </Button>
-          <Button
-            size="sm" variant="outline"
-            className="h-7 px-2.5 text-xs shrink-0"
-            onClick={() => downloadOne(c, 'PL')}
-            disabled={!!generating}
-            title="生成 PL PDF"
-          >
-            {generating === plKey ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <FileDown className="w-3 h-3 mr-1" />}
-            PL PDF
-          </Button>
           <button
             type="button"
             title="此货柜单独设置（覆盖客户/港口）"
@@ -736,7 +700,7 @@ export default function CiPlPage() {
         {containers.map((c, idx) => renderContainer(c, idx))}
       </div>
 
-      {/* Bottom bar: add + batch download */}
+      {/* Bottom bar */}
       <div className="flex flex-wrap items-center gap-3 pt-2">
         <Button
           variant="outline"
@@ -747,53 +711,121 @@ export default function CiPlPage() {
           添加货柜
         </Button>
         <div className="flex-1" />
-        {containers.length > 1 && (
-          <>
-            <Button
-              className="bg-emerald-600 hover:bg-emerald-700"
-              disabled={!!generating}
-              onClick={async () => {
-                setGenerating('allXLPL')
-                for (const c of containers) {
-                  if (c.products.some(p => p.name.trim())) await exportCiPlExcel({ ...buildProps(c, 'PL'), products: c.products.filter(p => p.name.trim()) })
-                }
-                setGenerating(null)
-                toast.success(`已导出 ${containers.length} 个 PL Excel`)
-              }}
-            >
-              {generating === 'allXLPL' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <FileSpreadsheet className="w-4 h-4 mr-2" />}
-              批量导出全部 PL Excel ({containers.length})
-            </Button>
-            <Button
-              className="bg-emerald-600 hover:bg-emerald-700"
-              disabled={!!generating}
-              onClick={async () => {
-                setGenerating('allXLCI')
-                for (const c of containers) {
-                  if (c.products.some(p => p.name.trim())) await exportCiPlExcel({ ...buildProps(c, 'CI'), products: c.products.filter(p => p.name.trim()) })
-                }
-                setGenerating(null)
-                toast.success(`已导出 ${containers.length} 个 CI Excel`)
-              }}
-            >
-              {generating === 'allXLCI' ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <FileSpreadsheet className="w-4 h-4 mr-2" />}
-              批量导出全部 CI Excel ({containers.length})
-            </Button>
-            <Button variant="outline" onClick={() => downloadAll('PL')} disabled={!!generating}>
-              {generating === 'allPL'
-                ? <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                : <FileDown className="w-4 h-4 mr-2" />}
-              批量 PL PDF
-            </Button>
-            <Button variant="outline" onClick={() => downloadAll('CI')} disabled={!!generating}>
-              {generating === 'allCI'
-                ? <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                : <FileDown className="w-4 h-4 mr-2" />}
-              批量 CI PDF
-            </Button>
-          </>
-        )}
+        <Button
+          className="bg-blue-600 hover:bg-blue-700"
+          disabled={!!generating}
+          onClick={openExportDialog}
+        >
+          {generating === 'batch'
+            ? <Loader2 className="w-4 h-4 animate-spin mr-2" />
+            : <FileDown className="w-4 h-4 mr-2" />}
+          导出单据
+        </Button>
       </div>
+
+      {/* ── Export Dialog ── */}
+      <Dialog open={exportOpen} onOpenChange={setExportOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>导出单据</DialogTitle>
+            <DialogDescription>选择要导出的货柜和格式，支持同时导出多种格式</DialogDescription>
+          </DialogHeader>
+
+          {/* Container selection */}
+          <div className="space-y-3">
+            <div>
+              <p className="text-sm font-medium mb-2">选择货柜</p>
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {containers.map((c, idx) => {
+                  const itemCount = c.products.filter(p => p.name.trim()).length
+                  const total = c.products.reduce((s, p) => s + p.amount_foreign, 0)
+                  const checked = exportContainerIds.has(c.id)
+                  return (
+                    <label
+                      key={c.id}
+                      className={`flex items-center gap-3 p-2.5 rounded-lg border cursor-pointer transition-colors ${
+                        checked ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'
+                      }`}
+                    >
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={(v) => {
+                          setExportContainerIds(prev => {
+                            const next = new Set(prev)
+                            v ? next.add(c.id) : next.delete(c.id)
+                            return next
+                          })
+                        }}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-medium">货柜 {idx + 1}</span>
+                        {c.containerNumber && (
+                          <span className="ml-2 text-xs font-mono text-gray-500">{c.containerNumber}</span>
+                        )}
+                      </div>
+                      {itemCount > 0 && (
+                        <span className="text-xs text-gray-400 shrink-0">
+                          {itemCount} 项{total > 0 ? ` · ${sym}${total.toFixed(2)}` : ''}
+                        </span>
+                      )}
+                    </label>
+                  )
+                })}
+              </div>
+              <button
+                type="button"
+                className="text-xs text-blue-600 hover:underline mt-1.5"
+                onClick={() => {
+                  const allIds = new Set(containers.map(c => c.id))
+                  const allSelected = containers.every(c => exportContainerIds.has(c.id))
+                  setExportContainerIds(allSelected ? new Set() : allIds)
+                }}
+              >
+                {containers.every(c => exportContainerIds.has(c.id)) ? '取消全选' : '全选'}
+              </button>
+            </div>
+
+            {/* Format selection */}
+            <div>
+              <p className="text-sm font-medium mb-2">选择格式</p>
+              <div className="grid grid-cols-2 gap-2">
+                {([
+                  { key: 'ciExcel', label: 'CI Excel', icon: <FileSpreadsheet className="w-4 h-4 text-emerald-600" /> },
+                  { key: 'plExcel', label: 'PL Excel', icon: <FileSpreadsheet className="w-4 h-4 text-emerald-600" /> },
+                  { key: 'ciPdf',   label: 'CI PDF',   icon: <FileDown className="w-4 h-4 text-blue-500" /> },
+                  { key: 'plPdf',   label: 'PL PDF',   icon: <FileDown className="w-4 h-4 text-blue-500" /> },
+                ] as { key: keyof typeof exportFormats; label: string; icon: React.ReactNode }[]).map(({ key, label, icon }) => (
+                  <label
+                    key={key}
+                    className={`flex items-center gap-2.5 p-2.5 rounded-lg border cursor-pointer transition-colors ${
+                      exportFormats[key] ? 'border-blue-300 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    <Checkbox
+                      checked={exportFormats[key]}
+                      onCheckedChange={(v) => setExportFormats(prev => ({ ...prev, [key]: !!v }))}
+                    />
+                    {icon}
+                    <span className="text-sm">{label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="mt-2">
+            <Button variant="outline" onClick={() => setExportOpen(false)}>取消</Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700"
+              onClick={handleBatchExport}
+              disabled={exportContainerIds.size === 0 || !Object.values(exportFormats).some(Boolean)}
+            >
+              确认导出
+              {exportContainerIds.size > 0 && ` (${exportContainerIds.size} 个货柜)`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

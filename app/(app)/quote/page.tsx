@@ -1,7 +1,8 @@
 'use client'
 
 import React, { useState, useEffect, useMemo, useRef } from 'react'
-import { Calculator, ChevronDown, Loader2, RefreshCw, FileText, Search, ArrowLeft, Plus, X, Package, Sparkles } from 'lucide-react'
+import { Calculator, Loader2, RefreshCw, FileText, Search, ArrowLeft, Plus, X, Package, Sparkles, GripVertical } from 'lucide-react'
+import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd'
 import { toast } from 'sonner'
 import { AiSidePanel } from '@/components/AiSidePanel'
 import { Button } from '@/components/ui/button'
@@ -59,6 +60,7 @@ const PAYMENT_TERMS_OPTIONS = [
 interface LibraryProduct {
   id: string
   name: string
+  external_name?: string | null
   model: string | null
   cost_price: number
   unit?: string
@@ -77,6 +79,8 @@ type PricingMode = 'margin' | 'order_markup_pct' | 'order_markup_fixed'
 interface CalcProductRow {
   id: string
   name: string
+  /** 对外显示名（来自产品库 external_name），用于 ③ 单据产品行初始填充 */
+  externalName?: string
   model: string
   unit: string
   costPrice: string // 工厂价 ¥/单位
@@ -120,6 +124,8 @@ type QuoteLayoutMode = 'product_list' | 'container_group'
 interface PDFProductRow {
   /** Section title row (e.g. container); excluded from totals and cost alignment by index. */
   isContainerHeader?: boolean
+  /** Links to the CalcProductRow.id for repricing — preserved across drag-and-drop reorders */
+  calcProductId?: string
   name: string
   model: string
   specs: string
@@ -369,10 +375,13 @@ function repricePdfProductsForTerm(
   const validCalc = calcProducts.filter(
     (p) => parseFloat(p.costPrice) > 0 && parseFloat(p.quantity) > 0
   )
-  let calcSlot = 0
+  let slotIdx = 0
   return pdfProducts.map((row) => {
     if (row.isContainerHeader) return row
-    const c = validCalc[calcSlot++]
+    // Prefer ID-based lookup (survives drag-and-drop reorder); fall back to sequential slot
+    const c = row.calcProductId
+      ? (validCalc.find((vc) => vc.id === row.calcProductId) ?? validCalc[slotIdx++])
+      : validCalc[slotIdx++]
     if (!c) return row
     const bp = multi.byProduct.find((b) => b.productId === c.id)
     const tr = bp?.results.find((r) => r.term === term)
@@ -411,8 +420,6 @@ export default function QuotePage() {
     { id: crypto.randomUUID(), name: '', model: '', unit: 'pc', costPrice: '', quantity: '100', quoteUnitCny: '' },
   ])
   const [productPickerRowId, setProductPickerRowId] = useState<string | null>(null)
-  // 'calc' = picking for ② calculator row; 'pdf' = picking for ③ doc row
-  const [productPickerTarget, setProductPickerTarget] = useState<'calc' | 'pdf'>('calc')
   const [formData, setFormData] = useState({
     domesticCost: '0',
     freight: '0',
@@ -488,6 +495,10 @@ export default function QuotePage() {
   const [quoteLayoutMode, setQuoteLayoutMode] = useState<QuoteLayoutMode>('product_list')
   /** 上一档「计算器有效行数」，用于 product_list 下正确切分「对齐行 / 手动追加行」，避免减少计算器行数时旧行被误并入 tail。 */
   const pdfProductListCalcLenRef = useRef<number | null>(null)
+
+  // ── Auto-save state
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null)
+  const autoSaveReadyRef = useRef(false)   // skip first mount write so restore can run first
 
   // ── AI Side Panel state
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
@@ -642,42 +653,85 @@ export default function QuotePage() {
     }
 
     if (!draftJson) {
-      // Restore auto-saved calculator params (but not when loading a draft)
-      const savedParams = localStorage.getItem('leadspark_calc_params')
-      if (savedParams) {
+      // Restore comprehensive session state (new format takes priority over legacy keys)
+      const sessionJson = localStorage.getItem('leadspark_calc_session')
+      if (sessionJson) {
         try {
-          const params = JSON.parse(savedParams) as Record<string, unknown>
-          setFormData((prev) => ({
-            ...prev,
-            ...params,
-            pricingMode: (params.pricingMode as PricingMode) || prev.pricingMode,
-            orderMarkupPercent:
-              typeof params.orderMarkupPercent === 'string'
-                ? params.orderMarkupPercent
-                : prev.orderMarkupPercent,
-            orderMarkupFixed:
-              typeof params.orderMarkupFixed === 'string' ? params.orderMarkupFixed : prev.orderMarkupFixed,
-          }))
+          const session = JSON.parse(sessionJson)
+          let restored = false
+          if (session.calcProducts?.length) {
+            setCalcProducts(migrateCalcProductRows(session.calcProducts, exchangeRate))
+            restored = true
+          }
+          if (session.formData) {
+            setFormData((prev) => ({
+              ...prev,
+              ...session.formData,
+              pricingMode: (session.formData.pricingMode as PricingMode) || prev.pricingMode,
+            }))
+          }
+          if (session.quoteDetails) setQuoteDetails((prev) => ({ ...prev, ...session.quoteDetails }))
+          if (session.quoteLayoutMode === 'container_group' || session.quoteLayoutMode === 'product_list') {
+            setQuoteLayoutMode(session.quoteLayoutMode)
+          }
+          if (Array.isArray(session.pdfProducts) && session.pdfProducts.length > 0) {
+            setPdfProducts(session.pdfProducts.map((r: PDFProductRow) => ({ ...r, isContainerHeader: Boolean(r.isContainerHeader) })))
+          }
+          if (session.piOutputScope) setPiOutputScope(session.piOutputScope)
+          if (session.piLogisticsTerm) setPiLogisticsTerm(session.piLogisticsTerm)
+          if (session.piDualPdfMode) setPiDualPdfMode(session.piDualPdfMode)
+          if (session.piMergedLineTerm) setPiMergedLineTerm(session.piMergedLineTerm)
+          if (restored) toast.info('已恢复上次草稿', { duration: 2500 })
         } catch { /* ignore */ }
-      }
-      const savedProducts = localStorage.getItem('leadspark_calc_products')
-      if (savedProducts) {
-        try {
-          const parsed = JSON.parse(savedProducts) as unknown[]
-          setCalcProducts(migrateCalcProductRows(parsed, exchangeRate))
-        } catch { /* ignore */ }
+      } else {
+        // Legacy fallback: read old separate keys
+        const savedParams = localStorage.getItem('leadspark_calc_params')
+        if (savedParams) {
+          try {
+            const params = JSON.parse(savedParams) as Record<string, unknown>
+            setFormData((prev) => ({
+              ...prev,
+              ...params,
+              pricingMode: (params.pricingMode as PricingMode) || prev.pricingMode,
+              orderMarkupPercent: typeof params.orderMarkupPercent === 'string' ? params.orderMarkupPercent : prev.orderMarkupPercent,
+              orderMarkupFixed: typeof params.orderMarkupFixed === 'string' ? params.orderMarkupFixed : prev.orderMarkupFixed,
+            }))
+          } catch { /* ignore */ }
+        }
+        const savedProducts = localStorage.getItem('leadspark_calc_products')
+        if (savedProducts) {
+          try {
+            setCalcProducts(migrateCalcProductRows(JSON.parse(savedProducts) as unknown[], exchangeRate))
+          } catch { /* ignore */ }
+        }
       }
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-save calculator params to localStorage
+  // Comprehensive auto-save — skips the very first mount so the restore effect can hydrate
+  // state before we write anything back to localStorage.
   useEffect(() => {
+    if (!autoSaveReadyRef.current) {
+      autoSaveReadyRef.current = true
+      return
+    }
+    const session = {
+      calcProducts,
+      formData,
+      pdfProducts,
+      quoteDetails,
+      quoteLayoutMode,
+      piOutputScope,
+      piLogisticsTerm,
+      piDualPdfMode,
+      piMergedLineTerm,
+    }
+    localStorage.setItem('leadspark_calc_session', JSON.stringify(session))
+    // Legacy keys kept for backward compat
     localStorage.setItem('leadspark_calc_params', JSON.stringify(formData))
-  }, [formData])
-
-  useEffect(() => {
     localStorage.setItem('leadspark_calc_products', JSON.stringify(calcProducts))
-  }, [calcProducts])
+    setLastSavedAt(new Date())
+  }, [calcProducts, formData, pdfProducts, quoteDetails, quoteLayoutMode, piOutputScope, piLogisticsTerm, piDualPdfMode, piMergedLineTerm])
 
   // Search customers with debounce — empty query shows recent customers
   useEffect(() => {
@@ -716,9 +770,13 @@ export default function QuotePage() {
           const qty = parseFloat(p.quantity) || 1
           const reusePrevRow =
             prevCalcLen == null ? idx < newCalcLen : idx < prevCalcLen
-          const prevRow = reusePrevRow ? prev[idx] : undefined
+          // ID-based lookup first (survives drag-and-drop reorders); fallback to positional
+          const prevRow = reusePrevRow
+            ? (prev.find((r) => !r.isContainerHeader && r.calcProductId === p.id) ?? prev[idx])
+            : undefined
           return {
-            name: prevRow?.name?.trim() ? prevRow.name : (p.name || '产品'),
+            calcProductId: p.id,
+            name: prevRow?.name?.trim() ? prevRow.name : (p.externalName || p.name || '产品'),
             model: prevRow?.model ?? p.model,
             specs: prevRow?.specs ?? '',
             qty,
@@ -748,10 +806,12 @@ export default function QuotePage() {
         const tr = bp?.results.find((r) => r.term === OUTPUT_TRADE_TERM)
         const unitPrice = tr?.priceForeign ?? 0
         const qty = parseFloat(p.quantity) || 1
-        const prevRow = oldProducts[idx]
+        // ID-based lookup first; fallback to positional
+        const prevRow = oldProducts.find((r) => r.calcProductId === p.id) ?? oldProducts[idx]
         return {
           isContainerHeader: false as const,
-          name: prevRow?.name?.trim() ? prevRow.name : (p.name || '产品'),
+          calcProductId: p.id,
+          name: prevRow?.name?.trim() ? prevRow.name : (p.externalName || p.name || '产品'),
           model: prevRow?.model ?? p.model,
           specs: prevRow?.specs ?? '',
           qty,
@@ -794,11 +854,11 @@ export default function QuotePage() {
       setRateUpdatedAt(data.updatedAt || '')
       setRateIsFallback(false)
     } else {
-      // Fallback: approximate rates — warn the user so they know to verify
+      // Fallback: 1 CNY → X foreign (mirrors server-side fallback in /api/exchange-rate)
       const FALLBACK: Record<string, number> = {
-        USD: 0.138, EUR: 0.150, GBP: 0.176, JPY: 0.00094,
-        AUD: 0.091, CAD: 0.101, AED: 0.0376, SGD: 0.103,
-        HKD: 0.0176, CNY: 1,
+        USD: 0.1374, EUR: 0.1272, GBP: 0.1082, JPY: 20.72,
+        AUD: 0.2178, CAD: 0.1916, AED: 0.5048, SGD: 0.1840,
+        HKD: 1.074, CNY: 1,
       }
       const fallback = FALLBACK[currency] ?? 0.138
       setExchangeRate(fallback)
@@ -860,26 +920,33 @@ export default function QuotePage() {
 
   const handleLibraryProductSelect = (product: LibraryProduct) => {
     if (!productPickerRowId) return
-    if (productPickerTarget === 'calc') {
-      setCalcProducts((prev) =>
-        prev.map((row) =>
-          row.id === productPickerRowId
-            ? { ...row, name: product.name, model: product.model || '', costPrice: String(product.cost_price), unit: product.unit || 'pc' }
-            : row
-        )
+    setCalcProducts((prev) =>
+      prev.map((row) =>
+        row.id === productPickerRowId
+          ? {
+              ...row,
+              name: product.name,
+              externalName: product.external_name || product.name,
+              model: product.model || '',
+              costPrice: String(product.cost_price),
+              unit: product.unit || 'pc',
+            }
+          : row
       )
-    } else {
-      // pdf target — rowId is the row's unique key (idx as string)
-      const idx = parseInt(productPickerRowId, 10)
-      setPdfProducts((prev) =>
-        prev.map((row, i) =>
-          i === idx
-            ? { ...row, name: product.name, model: product.model || '', unit: product.unit || 'pc', specs: product.specs || '' }
-            : row
-        )
-      )
-    }
+    )
     setProductPickerRowId(null)
+  }
+
+  const handlePdfProductDragEnd = (result: DropResult) => {
+    if (!result.destination) return
+    const { source, destination } = result
+    if (source.index === destination.index) return
+    setPdfProducts((prev) => {
+      const next = [...prev]
+      const [moved] = next.splice(source.index, 1)
+      next.splice(destination.index, 0, moved)
+      return next
+    })
   }
 
   const formatTime = (isoString: string) => {
@@ -1448,10 +1515,37 @@ export default function QuotePage() {
           <Calculator className="w-6 h-6 shrink-0" />
           <h1 className="text-2xl font-bold">新建报价</h1>
         </div>
-        <Button variant="outline" size="sm" onClick={() => setAiPanelOpen(true)} className="shrink-0">
-          <Sparkles className="mr-1.5 h-4 w-4 text-blue-500" />
-          AI 解析询盘
-        </Button>
+        <div className="flex items-center gap-2 shrink-0">
+          {lastSavedAt ? (
+            <span className="hidden sm:inline-flex items-center gap-1 text-xs text-green-600 bg-green-50 border border-green-200 rounded px-2 py-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+              已自动保存 {lastSavedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          ) : (
+            <span className="hidden sm:inline-flex items-center gap-1 text-xs text-gray-400 bg-gray-50 border border-gray-200 rounded px-2 py-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-gray-300 inline-block" />
+              未保存
+            </span>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-xs text-gray-400 hover:text-red-500"
+            onClick={() => {
+              if (!confirm('清除草稿会重置所有已填内容，确定吗？')) return
+              localStorage.removeItem('leadspark_calc_session')
+              localStorage.removeItem('leadspark_calc_params')
+              localStorage.removeItem('leadspark_calc_products')
+              window.location.reload()
+            }}
+          >
+            清除草稿
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setAiPanelOpen(true)}>
+            <Sparkles className="mr-1.5 h-4 w-4 text-blue-500" />
+            AI 解析询盘
+          </Button>
+        </div>
       </div>
 
       {/* 单据类型选择 — 放最前面，决定输出目标 */}
@@ -1852,7 +1946,7 @@ export default function QuotePage() {
                     <span className="text-base font-semibold ml-2 text-gray-900">
                       {formData.currency === 'CNY'
                         ? 'CNY 为本位币（无需换算）'
-                        : `${formData.currency}/CNY = ${exchangeRate.toFixed(4)}`}
+                        : `1 ${formData.currency} = ${(1 / exchangeRate).toFixed(4)} CNY`}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1924,7 +2018,17 @@ export default function QuotePage() {
             ) : (
               <>
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div />
+                  <div className="flex flex-wrap items-center gap-2">
+                    {quoteLayoutMode === 'container_group' && (
+                      <button
+                        type="button"
+                        className="text-xs bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-100 rounded px-2 py-1"
+                        onClick={() => setPdfProducts((prev) => [emptyContainerHeaderRow(), ...prev])}
+                      >
+                        ＋ 添加货柜
+                      </button>
+                    )}
+                  </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="inline-flex rounded-md border border-gray-200 bg-white p-0.5 text-xs">
                       <button
@@ -1951,178 +2055,128 @@ export default function QuotePage() {
                         按货柜分组
                       </button>
                     </div>
-                    {quoteLayoutMode === 'container_group' && (
-                      <button
-                        type="button"
-                        className="text-xs text-amber-700 hover:underline"
-                        onClick={() => setPdfProducts((prev) => [...prev, emptyContainerHeaderRow()])}
-                      >
-                        + 货柜标题
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="text-xs text-blue-600 hover:underline"
-                      onClick={() => {
-                        const price = selectedTradeResult?.priceForeign || 0
-                        setPdfProducts((prev) => [...prev, emptyProductPdfRow(price)])
-                      }}
-                    >
-                      + 添加行
-                    </button>
                   </div>
                 </div>
+                <p className="text-xs text-blue-600/80 bg-blue-50 rounded px-2 py-1.5">
+                  此处名称为对外显示名（单据上打印的内容），可直接修改；拖动 <GripVertical className="inline w-3 h-3" /> 可调整顺序。
+                </p>
                 <div className="border rounded-lg overflow-hidden">
                   <table className="w-full text-xs">
                     <thead className="bg-gray-50">
                       <tr>
-                        <th className="text-left p-2 font-medium text-gray-500">产品名称</th>
+                        <th className="p-2 w-5"></th>
+                        <th className="text-left p-2 font-medium text-gray-500">产品名称（对外）</th>
                         <th className="text-right p-2 font-medium text-gray-500 w-16">数量</th>
                         <th className="text-right p-2 font-medium text-gray-500 w-20">单价</th>
                         <th className="text-right p-2 font-medium text-gray-500 w-20">小计</th>
-                        <th className="p-2 w-6"></th>
+                        <th className="p-2 w-8"></th>
                       </tr>
                     </thead>
-                    <tbody>
-                      {pdfProducts.map((row, idx) =>
-                        row.isContainerHeader ? (
-                          <tr key={idx} className="border-t bg-amber-50/80 group">
-                            <td className="p-1" colSpan={4}>
-                              <input
-                                className="w-full text-xs border border-amber-200 rounded px-1 py-0.5 focus:outline-blue-400 font-medium"
-                                value={row.name}
-                                onChange={(e) => {
-                                  const u = [...pdfProducts]
-                                  u[idx] = { ...u[idx], name: e.target.value }
-                                  setPdfProducts(u)
-                                }}
-                                placeholder="货柜 / 分组标题（如 1×40HQ）"
-                              />
-                            </td>
-                            <td className="p-1">
-                              <div className="flex items-center justify-center gap-1">
-                                <button
-                                  type="button"
-                                  title="在上方插入产品行"
-                                  className="opacity-0 group-hover:opacity-100 text-blue-400 hover:text-blue-600 text-xs px-1"
-                                  onClick={() => {
-                                    const u = [...pdfProducts]
-                                    u.splice(idx, 0, emptyProductPdfRow(selectedTradeResult?.priceForeign || 0))
-                                    setPdfProducts(u)
-                                  }}
-                                >↑+</button>
-                                <button
-                                  type="button"
-                                  title="在下方插入产品行"
-                                  className="opacity-0 group-hover:opacity-100 text-blue-400 hover:text-blue-600 text-xs px-1"
-                                  onClick={() => {
-                                    const u = [...pdfProducts]
-                                    u.splice(idx + 1, 0, emptyProductPdfRow(selectedTradeResult?.priceForeign || 0))
-                                    setPdfProducts(u)
-                                  }}
-                                >↓+</button>
-                                <button
-                                  type="button"
-                                  title="删除此行"
-                                  className="text-red-400 hover:text-red-600"
-                                  onClick={() => setPdfProducts((prev) => prev.filter((_, i) => i !== idx))}
-                                >×</button>
-                              </div>
-                            </td>
-                          </tr>
-                        ) : (
-                          <tr key={idx} className="border-t group">
-                            <td className="p-1">
-                              <div className="flex items-center gap-0.5">
-                                <button
-                                  type="button"
-                                  title="从产品库选择"
-                                  onClick={() => {
-                                    setProductPickerTarget('pdf')
-                                    setProductPickerRowId(String(idx))
-                                  }}
-                                  className="flex-shrink-0 p-0.5 rounded hover:bg-gray-100 text-gray-300 hover:text-blue-600"
-                                >
-                                  <Package className="w-3.5 h-3.5" />
-                                </button>
-                                <input
-                                  className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
-                                  value={row.name}
-                                  onChange={(e) => {
-                                    const u = [...pdfProducts]
-                                    u[idx] = { ...u[idx], name: e.target.value }
-                                    setPdfProducts(u)
-                                  }}
-                                  placeholder="产品名称"
-                                />
-                              </div>
-                            </td>
-                            <td className="p-1">
-                              <input
-                                type="number"
-                                className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
-                                value={row.qty}
-                                onChange={(e) => {
-                                  const qty = parseFloat(e.target.value) || 1
-                                  const u = [...pdfProducts]
-                                  u[idx] = { ...u[idx], qty, amount_foreign: qty * u[idx].unit_price_foreign }
-                                  setPdfProducts(u)
-                                }}
-                              />
-                            </td>
-                            <td className="p-1">
-                              <input
-                                type="number"
-                                className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
-                                value={row.unit_price_foreign.toFixed(4)}
-                                onChange={(e) => {
-                                  const price = parseFloat(e.target.value) || 0
-                                  const u = [...pdfProducts]
-                                  u[idx] = { ...u[idx], unit_price_foreign: price, amount_foreign: price * u[idx].qty }
-                                  setPdfProducts(u)
-                                }}
-                              />
-                            </td>
-                            <td className="p-2 text-right font-medium">
-                              {sym}{row.amount_foreign.toFixed(2)}
-                            </td>
-                            <td className="p-1">
-                              <div className="flex items-center justify-center gap-1">
-                                <button
-                                  type="button"
-                                  title="在上方插入行"
-                                  className="opacity-0 group-hover:opacity-100 text-blue-400 hover:text-blue-600 text-xs px-1"
-                                  onClick={() => {
-                                    const u = [...pdfProducts]
-                                    u.splice(idx, 0, emptyProductPdfRow(selectedTradeResult?.priceForeign || 0))
-                                    setPdfProducts(u)
-                                  }}
-                                >↑+</button>
-                                <button
-                                  type="button"
-                                  title="在下方插入行"
-                                  className="opacity-0 group-hover:opacity-100 text-blue-400 hover:text-blue-600 text-xs px-1"
-                                  onClick={() => {
-                                    const u = [...pdfProducts]
-                                    u.splice(idx + 1, 0, emptyProductPdfRow(selectedTradeResult?.priceForeign || 0))
-                                    setPdfProducts(u)
-                                  }}
-                                >↓+</button>
-                                <button
-                                  type="button"
-                                  title="删除此行"
-                                  className="text-red-400 hover:text-red-600"
-                                  onClick={() => setPdfProducts((prev) => prev.filter((_, i) => i !== idx))}
-                                >×</button>
-                              </div>
-                            </td>
-                          </tr>
-                        )
-                      )}
-                    </tbody>
+                    <DragDropContext onDragEnd={handlePdfProductDragEnd}>
+                      <Droppable droppableId="pdf-products">
+                        {(droppableProvided) => (
+                          <tbody ref={droppableProvided.innerRef} {...droppableProvided.droppableProps}>
+                            {pdfProducts.map((row, idx) => (
+                              <Draggable key={`pdf-row-${idx}`} draggableId={`pdf-row-${idx}`} index={idx}>
+                                {(dragProvided, dragSnapshot) =>
+                                  row.isContainerHeader ? (
+                                    <tr
+                                      ref={dragProvided.innerRef}
+                                      {...dragProvided.draggableProps}
+                                      className={`border-t bg-amber-50/80 group ${dragSnapshot.isDragging ? 'shadow-lg opacity-90' : ''}`}
+                                    >
+                                      <td className="p-1 text-center">
+                                        <span {...dragProvided.dragHandleProps} className="cursor-grab active:cursor-grabbing text-amber-400 hover:text-amber-600 inline-flex">
+                                          <GripVertical className="w-3.5 h-3.5" />
+                                        </span>
+                                      </td>
+                                      <td className="p-1" colSpan={4}>
+                                        <input
+                                          className="w-full text-xs border border-amber-200 rounded px-1 py-0.5 focus:outline-blue-400 font-medium"
+                                          value={row.name}
+                                          onChange={(e) => {
+                                            const u = [...pdfProducts]
+                                            u[idx] = { ...u[idx], name: e.target.value }
+                                            setPdfProducts(u)
+                                          }}
+                                          placeholder="货柜 / 分组标题（如 1×40HQ）"
+                                        />
+                                      </td>
+                                      <td className="p-1">
+                                        <button
+                                          type="button"
+                                          title="删除货柜标题"
+                                          className="text-red-400 hover:text-red-600"
+                                          onClick={() => setPdfProducts((prev) => prev.filter((_, i) => i !== idx))}
+                                        >×</button>
+                                      </td>
+                                    </tr>
+                                  ) : (
+                                    <tr
+                                      ref={dragProvided.innerRef}
+                                      {...dragProvided.draggableProps}
+                                      className={`border-t group ${dragSnapshot.isDragging ? 'shadow-lg opacity-90 bg-white' : ''}`}
+                                    >
+                                      <td className="p-1 text-center">
+                                        <span {...dragProvided.dragHandleProps} className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500 inline-flex">
+                                          <GripVertical className="w-3.5 h-3.5" />
+                                        </span>
+                                      </td>
+                                      <td className="p-1">
+                                        <input
+                                          className="w-full text-xs border rounded px-1 py-0.5 focus:outline-blue-400"
+                                          value={row.name}
+                                          onChange={(e) => {
+                                            const u = [...pdfProducts]
+                                            u[idx] = { ...u[idx], name: e.target.value }
+                                            setPdfProducts(u)
+                                          }}
+                                          placeholder="产品对外名称"
+                                        />
+                                      </td>
+                                      <td className="p-1">
+                                        <input
+                                          type="number"
+                                          className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
+                                          value={row.qty}
+                                          onChange={(e) => {
+                                            const qty = parseFloat(e.target.value) || 1
+                                            const u = [...pdfProducts]
+                                            u[idx] = { ...u[idx], qty, amount_foreign: qty * u[idx].unit_price_foreign }
+                                            setPdfProducts(u)
+                                          }}
+                                        />
+                                      </td>
+                                      <td className="p-1">
+                                        <input
+                                          type="number"
+                                          className="w-full text-xs border rounded px-1 py-0.5 text-right focus:outline-blue-400"
+                                          value={row.unit_price_foreign.toFixed(4)}
+                                          onChange={(e) => {
+                                            const price = parseFloat(e.target.value) || 0
+                                            const u = [...pdfProducts]
+                                            u[idx] = { ...u[idx], unit_price_foreign: price, amount_foreign: price * u[idx].qty }
+                                            setPdfProducts(u)
+                                          }}
+                                        />
+                                      </td>
+                                      <td className="p-2 text-right font-medium">
+                                        {sym}{row.amount_foreign.toFixed(2)}
+                                      </td>
+                                      <td className="p-1"></td>
+                                    </tr>
+                                  )
+                                }
+                              </Draggable>
+                            ))}
+                            {droppableProvided.placeholder}
+                          </tbody>
+                        )}
+                      </Droppable>
+                    </DragDropContext>
                     <tfoot className="bg-gray-50 border-t">
                       <tr>
-                        <td colSpan={3} className="p-2 text-right text-xs font-bold text-gray-600">
+                        <td colSpan={4} className="p-2 text-right text-xs font-bold text-gray-600">
                           合计
                         </td>
                         <td className="p-2 text-right text-xs font-bold text-blue-700">
@@ -2139,8 +2193,8 @@ export default function QuotePage() {
                 </div>
                 <p className="text-xs text-gray-400">
                   {quoteLayoutMode === 'container_group'
-                    ? '货柜标题行仅用于 PDF 分组与小计；产品行顺序仍与 ② 中成本表一致。填 ④ 物流时可将海运费等按柜或按票与你的分组对照。'
-                    : '与 ② 成本行按顺序对应；可添加额外明细行。保存/生成 PDF 时按后面「价格板块」选项重算单价。'}
+                    ? '点击「＋ 添加货柜」在顶部插入新货柜标题，拖动行调整顺序。货柜标题行用于 PDF 分组，可单独删除。'
+                    : '产品行与 ② 成本表按顺序对应；名称可自由修改（此处修改不影响 ② 内的内部名）。'}
                 </p>
               </>
             )}

@@ -38,7 +38,7 @@ export async function PUT(
     const { id } = await params
     const supabase = createAdminClient()
     const body = await request.json()
-    const { name, model, cost_price, unit, specs, image_url, category } = body
+    const { name, model, cost_price, unit, specs, image_url, category, external_name } = body
 
     const { data, error } = await supabase
       .from('products')
@@ -50,6 +50,7 @@ export async function PUT(
         specs,
         image_url,
         category,
+        external_name: external_name || null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', id)

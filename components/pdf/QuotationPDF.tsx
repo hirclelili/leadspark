@@ -6,14 +6,29 @@ import {
   View,
   StyleSheet,
   Image,
+  Font,
 } from '@react-pdf/renderer'
 import { amountInWordsEn } from '@/lib/amountInWords'
+
+// Register NotoSansSC for full CJK (Chinese) character support.
+// Fonts are served from /public/fonts/ at runtime.
+Font.register({
+  family: 'NotoSansSC',
+  fonts: [
+    { src: '/fonts/NotoSansSC-Regular.ttf', fontWeight: 400 },
+    { src: '/fonts/NotoSansSC-Bold.ttf', fontWeight: 700 },
+  ],
+})
+
+// Prevent font hyphenation for clean line-breaking
+Font.registerHyphenationCallback((word) => [word])
 
 const styles = StyleSheet.create({
   page: {
     padding: 40,
     fontSize: 10,
-    fontFamily: 'Helvetica',
+    fontFamily: 'NotoSansSC',
+    fontWeight: 400,
   },
   header: {
     flexDirection: 'row',
@@ -25,7 +40,8 @@ const styles = StyleSheet.create({
   },
   companyName: {
     fontSize: 16,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC',
+    fontWeight: 700,
     marginBottom: 4,
   },
   companyInfo: {
@@ -37,7 +53,8 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 18,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC',
+    fontWeight: 700,
     marginBottom: 4,
   },
   quoteNumber: {
@@ -65,7 +82,8 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 12,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC',
+    fontWeight: 700,
     marginBottom: 8,
   },
   table: {
@@ -79,7 +97,8 @@ const styles = StyleSheet.create({
     borderBottomColor: '#ddd',
   },
   tableHeaderCell: {
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC',
+    fontWeight: 700,
     fontSize: 9,
   },
   tableRow: {
@@ -129,10 +148,12 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-end',
   },
   totalLabel: {
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC',
+    fontWeight: 700,
   },
   totalValue: {
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC',
+    fontWeight: 700,
   },
   notesSection: {
     marginBottom: 20,
@@ -199,7 +220,8 @@ const styles = StyleSheet.create({
   },
   containerHeaderText: {
     fontSize: 10,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC',
+    fontWeight: 700,
     flex: 1,
   },
   subtotalRow: {
@@ -214,12 +236,14 @@ const styles = StyleSheet.create({
   },
   subtotalLabel: {
     fontSize: 9,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC',
+    fontWeight: 700,
     color: '#444',
   },
   subtotalValue: {
     fontSize: 9,
-    fontFamily: 'Helvetica-Bold',
+    fontFamily: 'NotoSansSC',
+    fontWeight: 700,
     width: 70,
     textAlign: 'right',
   },
@@ -547,7 +571,7 @@ export function QuotationPDF({
                   Description
                 </Text>
                 <Text style={[styles.tableHeaderCell, styles.qtyCell]}>Qty</Text>
-                <Text style={[styles.tableHeaderCell, { width: 50, fontSize: 9, fontFamily: 'Helvetica-Bold' }]}>Unit</Text>
+                <Text style={[styles.tableHeaderCell, { width: 50, fontSize: 9, fontFamily: 'NotoSansSC', fontWeight: 700 }]}>Unit</Text>
               </View>
               {plSlices.map((slice, index) =>
                 slice.kind === 'header' ? (
@@ -587,10 +611,10 @@ export function QuotationPDF({
                 ) : slice.kind === 'subtotal' ? (
                   <View key={`pr-s-${index}`} style={[styles.tableRow, { backgroundColor: '#fafafa' }]}>
                     <Text style={styles.itemCell} />
-                    <Text style={[styles.descCell, { fontFamily: 'Helvetica-Bold' }]}>Subtotal</Text>
+                    <Text style={[styles.descCell, { fontFamily: 'NotoSansSC', fontWeight: 700 }]}>Subtotal</Text>
                     <Text style={styles.qtyCell} />
                     <Text style={styles.priceCell} />
-                    <Text style={[styles.amountCell, { fontFamily: 'Helvetica-Bold' }]}>
+                    <Text style={[styles.amountCell, { fontFamily: 'NotoSansSC', fontWeight: 700 }]}>
                       {formatPrice(slice.amount)}
                     </Text>
                   </View>

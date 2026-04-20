@@ -57,7 +57,7 @@ export async function POST(request: Request) {
 
     const supabase = createAdminClient()
     const body = await request.json()
-    const { name, model, cost_price, unit, specs, image_url, category } = body
+    const { name, model, cost_price, unit, specs, image_url, category, external_name } = body
 
     if (!name || !cost_price) {
       return NextResponse.json({ error: '产品名称和成本价为必填' }, { status: 400 })
@@ -74,6 +74,7 @@ export async function POST(request: Request) {
         specs,
         image_url,
         category,
+        external_name: external_name || null,
       })
       .select()
       .single()

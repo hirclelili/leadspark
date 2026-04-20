@@ -29,6 +29,7 @@ import { useRouter } from 'next/navigation'
 interface Product {
   id: string
   name: string
+  external_name: string | null
   model: string | null
   cost_price: number
   unit: string
@@ -54,6 +55,7 @@ export function ProductsClient() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
   const [formData, setFormData] = useState({
     name: '',
+    external_name: '',
     model: '',
     cost_price: '',
     unit: 'pc',
@@ -103,6 +105,7 @@ export function ProductsClient() {
       setEditingProduct(product)
       setFormData({
         name: product.name,
+        external_name: product.external_name || '',
         model: product.model || '',
         cost_price: String(product.cost_price),
         unit: product.unit,
@@ -113,6 +116,7 @@ export function ProductsClient() {
       setEditingProduct(null)
       setFormData({
         name: '',
+        external_name: '',
         model: '',
         cost_price: '',
         unit: 'pc',
@@ -208,15 +212,27 @@ export function ProductsClient() {
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4 py-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">产品名称 *</label>
-                  <Input
-                    value={formData.name}
-                    onChange={(e) =>
-                      setFormData({ ...formData, name: e.target.value })
-                    }
-                    placeholder="产品名称"
-                  />
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">产品名称（内部）*</label>
+                    <Input
+                      value={formData.name}
+                      onChange={(e) =>
+                        setFormData({ ...formData, name: e.target.value })
+                      }
+                      placeholder="内部称呼，如型号缩写"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">对外名称（单据显示）</label>
+                    <Input
+                      value={formData.external_name}
+                      onChange={(e) =>
+                        setFormData({ ...formData, external_name: e.target.value })
+                      }
+                      placeholder="留空则使用产品名称"
+                    />
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -334,8 +350,9 @@ export function ProductsClient() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b text-left text-sm text-gray-500">
-                    <th className="py-3 px-4 w-[30%]">产品名称</th>
-                    <th className="py-3 px-4 w-[20%]">型号</th>
+                    <th className="py-3 px-4 w-[25%]">产品名称</th>
+                    <th className="py-3 px-4 w-[20%]">对外名称</th>
+                    <th className="py-3 px-4 w-[15%]">型号</th>
                     <th className="py-3 px-4 w-[15%]">成本价 (CNY)</th>
                     <th className="py-3 px-4 w-[10%]">单位</th>
                     <th className="py-3 px-4 w-[15%]">分类</th>
@@ -350,6 +367,9 @@ export function ProductsClient() {
                         {product.specs && (
                           <div className="truncate text-xs text-gray-400 mt-0.5" title={product.specs}>{product.specs}</div>
                         )}
+                      </td>
+                      <td className="py-3 px-4 text-gray-500 max-w-0">
+                        <div className="truncate" title={product.external_name || ''}>{product.external_name || <span className="text-gray-300 text-xs">同内部名</span>}</div>
                       </td>
                       <td className="py-3 px-4 text-gray-500 max-w-0">
                         <div className="truncate" title={product.model || ''}>{product.model || '-'}</div>

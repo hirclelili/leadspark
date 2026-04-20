@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { FileText, ChevronLeft, ChevronRight, Search, X, ArrowRight } from 'lucide-react'
+import { FileText, ChevronLeft, ChevronRight, Search, X, ArrowRight, Download, Ship, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,6 +17,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { QUOTE_STATUS_CONFIG, formatDate } from '@/lib/format'
+import { useUserProfile } from '@/contexts/UserProfileContext'
+import type { QuoteLayoutMode } from '@/components/pdf/QuotationPDF'
 
 const STATUS_CONFIG = QUOTE_STATUS_CONFIG
 type QuoteStatus = keyof typeof STATUS_CONFIG
@@ -64,12 +66,135 @@ function getDateRange(range: string): { date_from: string; date_to: string } {
 export default function QuoteHistoryPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { profile: userProfile } = useUserProfile()
 
   const [quotations, setQuotations] = useState<Quotation[]>([])
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const limit = 10
+
+  // Tracks which card is currently processing a quick action (id → action)
+  const [quickLoading, setQuickLoading] = useState<Record<string, 'pdf' | 'cipl'>>({})
+
+  const setQL = (id: string, action: 'pdf' | 'cipl' | null) =>
+    setQuickLoading((prev) => {
+      const next = { ...prev }
+      if (action === null) delete next[id]
+      else next[id] = action
+      return next
+    })
+
+  /** Fetch full quotation detail, then generate + download PDF inline */
+  const handleQuickPdf = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation()
+    if (quickLoading[id]) return
+    setQL(id, 'pdf')
+    try {
+      const res = await fetch(`/api/quotations/${id}`)
+      const q = await res.json()
+      if (!res.ok || q.error) { toast.error(q.error || '加载失败'); return }
+
+      const { pdf } = await import('@react-pdf/renderer')
+      const { QuotationPDF } = await import('@/components/pdf/QuotationPDF')
+      const profile = userProfile
+
+      const safeLogoUrl = profile?.logo_url && /^https?:\/\//i.test(profile.logo_url)
+        ? profile.logo_url : undefined
+
+      const docKind = (q.document_kind || 'QUOTATION') as 'QUOTATION' | 'PI' | 'CI' | 'PL'
+      const showSellerHeader =
+        docKind === 'PL' ? q.seller_visible_pl !== false
+        : docKind === 'PI' || docKind === 'QUOTATION' ? q.seller_visible_pi !== false
+        : q.seller_visible_ci !== false
+
+      const element = React.createElement(QuotationPDF, {
+        companyName: profile?.company_name || 'Your Company',
+        companyNameCn: profile?.company_name_cn,
+        address: profile?.address,
+        phone: profile?.phone,
+        email: profile?.email,
+        website: profile?.website,
+        logoUrl: safeLogoUrl,
+        bankName: profile?.bank_name,
+        bankAccount: profile?.bank_account,
+        bankSwift: profile?.bank_swift,
+        bankBeneficiary: profile?.bank_beneficiary,
+        clientName: q.customers?.company_name || '—',
+        clientContact: q.customers?.contact_name || undefined,
+        quotationNumber: q.quotation_number,
+        documentNumberDisplay: (q.reference_number?.trim()) || q.quotation_number,
+        date: new Date(q.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+        validityDays: q.validity_days,
+        tradeTerm: q.trade_term,
+        currency: q.currency,
+        products: q.products.map((p: any) => ({
+          name: p.name, model: p.model, specs: p.specs,
+          qty: p.qty, unit: p.unit,
+          unit_price_foreign: p.unit_price_foreign,
+          amount_foreign: p.amount_foreign,
+          is_container_header: p.is_container_header === true,
+        })),
+        quoteMode: (q.quote_mode === 'container_group' ? 'container_group' : 'product_list') as QuoteLayoutMode,
+        totalAmount: q.total_amount_foreign,
+        paymentTerms: q.payment_terms,
+        deliveryTime: q.delivery_time,
+        packing: q.packing || undefined,
+        remarks: q.remarks || undefined,
+        documentKind: docKind,
+        showSellerHeader,
+        poNumber: q.po_number?.trim() || undefined,
+        depositPercent: docKind === 'PI' ? Number(q.deposit_percent) || 0 : 0,
+      })
+
+      const blob = await pdf(element as Parameters<typeof pdf>[0]).toBlob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${q.quotation_number}.pdf`
+      document.body.appendChild(a); a.click()
+      document.body.removeChild(a); URL.revokeObjectURL(url)
+      toast.success('PDF 下载成功')
+    } catch (err: any) {
+      toast.error(err.message || '下载失败')
+    } finally {
+      setQL(id, null)
+    }
+  }
+
+  /** Fetch full quotation, store prefill in localStorage, navigate to CI/PL page */
+  const handleQuickCiPl = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation()
+    if (quickLoading[id]) return
+    setQL(id, 'cipl')
+    try {
+      const res = await fetch(`/api/quotations/${id}`)
+      const q = await res.json()
+      if (!res.ok || q.error) { toast.error(q.error || '加载失败'); return }
+
+      const prefill = {
+        customerName: q.customers?.company_name || '',
+        customerContact: q.customers?.contact_name || '',
+        currency: q.currency,
+        tradeTerm: q.trade_term,
+        paymentTerms: q.payment_terms || '',
+        piNumber: q.quotation_number,
+        products: q.products
+          .filter((p: any) => !p.is_container_header)
+          .map((p: any) => ({
+            name: p.name, model: p.model || '',
+            qty: p.qty, unit: p.unit,
+            unit_price_foreign: p.unit_price_foreign,
+            amount_foreign: p.amount_foreign,
+          })),
+      }
+      localStorage.setItem('leadspark_cipl_prefill', JSON.stringify(prefill))
+      router.push('/documents/ci-pl')
+    } catch (err: any) {
+      toast.error(err.message || '跳转失败')
+      setQL(id, null)
+    }
+  }
 
   // Filter state (synced from URL)
   const [search, setSearch] = useState(searchParams.get('search') || '')
@@ -288,13 +413,41 @@ export default function QuoteHistoryPage() {
                         </div>
                       )}
                     </div>
-                    {/* Right side: amount + arrow */}
+                    {/* Right side: amount + quick actions + arrow */}
                     <div className="flex items-center gap-3 flex-shrink-0">
                       <div className="text-right">
                         <div className="font-bold text-base tabular-nums">
                           {CURRENCY_SYMBOL[q.currency] || q.currency}{' '}
                           {q.total_amount_foreign.toFixed(2)}
                         </div>
+                      </div>
+                      {/* Quick action buttons — visible on hover */}
+                      <div className="hidden sm:flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          onClick={(e) => handleQuickPdf(e, q.id)}
+                          disabled={!!quickLoading[q.id]}
+                          title="下载 PDF"
+                        >
+                          {quickLoading[q.id] === 'pdf'
+                            ? <Loader2 className="w-3 h-3 animate-spin" />
+                            : <Download className="w-3 h-3" />}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 px-2 text-xs whitespace-nowrap"
+                          onClick={(e) => handleQuickCiPl(e, q.id)}
+                          disabled={!!quickLoading[q.id]}
+                          title="生成 CI/PL"
+                        >
+                          {quickLoading[q.id] === 'cipl'
+                            ? <Loader2 className="w-3 h-3 animate-spin" />
+                            : <Ship className="w-3 h-3" />}
+                          <span className="ml-1">CI/PL</span>
+                        </Button>
                       </div>
                       <ArrowRight className="w-4 h-4 text-gray-300 group-hover:text-blue-400 transition-colors" />
                     </div>
