@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Building2, Upload, Loader2, Pencil, X, Check, CreditCard, Globe } from 'lucide-react'
+import { Building2, Upload, Loader2, Pencil, X, Check, CreditCard, Globe, Hash, RotateCcw } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useUserProfile } from '@/contexts/UserProfileContext'
 import { Button } from '@/components/ui/button'
@@ -16,6 +16,8 @@ import {
 } from '@/components/ui/select'
 import { toast } from 'sonner'
 import { CURRENCY_OPTIONS } from '@/lib/currencies'
+import { previewNextDocNumber } from '@/lib/docNumber'
+import type { DocNumberConfig, YearFormat } from '@/lib/docNumber'
 
 interface UserProfile {
   id?: string
@@ -433,6 +435,216 @@ export function SettingsClient() {
           </Button>
         </div>
       )}
+
+      {/* ── Document Number Settings ── */}
+      <DocNumberSettings />
     </div>
+  )
+}
+
+// ─── DocNumberSettings (self-contained sub-component) ────────────────────────
+
+const DOC_LABELS: Record<string, string> = {
+  Q:  '报价单 (Quotation)',
+  PI: 'PI 形式发票',
+  CI: 'CI 商业发票',
+}
+
+const YEAR_FORMAT_OPTIONS: { value: YearFormat; label: string; example: string }[] = [
+  { value: 'YYYY',     label: '完整年份', example: '2026' },
+  { value: 'YY',       label: '两位年份', example: '26' },
+  { value: 'YYYYMMDD', label: '年月日',   example: '20260421' },
+  { value: 'none',     label: '不含年份', example: '—' },
+]
+
+function DocNumberSettings() {
+  const [configs, setConfigs] = useState<DocNumberConfig[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState<string | null>(null)
+  const [resetting, setResetting] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetch('/api/doc-number')
+      .then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setConfigs(data) })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  const patch = (docType: string, field: keyof DocNumberConfig, value: unknown) =>
+    setConfigs(prev => prev.map(c => c.doc_type === docType ? { ...c, [field]: value } : c))
+
+  const handleSave = async (cfg: DocNumberConfig) => {
+    setSaving(cfg.doc_type)
+    try {
+      const res = await fetch('/api/doc-number', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfg),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error)
+      toast.success(`${DOC_LABELS[cfg.doc_type] || cfg.doc_type} 编号格式已保存`)
+    } catch (err: any) {
+      toast.error(err.message || '保存失败')
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  const handleReset = async (docType: string) => {
+    if (!confirm(`确定要将「${DOC_LABELS[docType]}」的序号重置为 0 吗？\n下一张单据将从 001 开始编号。`)) return
+    setResetting(docType)
+    try {
+      const res = await fetch('/api/doc-number', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doc_type: docType }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) throw new Error(data.error)
+      setConfigs(prev => prev.map(c => c.doc_type === docType ? { ...c, current_seq: 0, current_year: 0 } : c))
+      toast.success('序号已重置')
+    } catch (err: any) {
+      toast.error(err.message || '重置失败')
+    } finally {
+      setResetting(null)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Hash className="w-5 h-5" />
+          单据编号
+        </CardTitle>
+        <CardDescription>自定义报价单、PI、CI 的编号前缀和格式，系统自动递增序号</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <div className="flex items-center gap-2 text-gray-400 py-4">
+            <Loader2 className="w-4 h-4 animate-spin" /> 加载中…
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {configs.map(cfg => {
+              const preview = previewNextDocNumber(cfg)
+              const isSaving   = saving   === cfg.doc_type
+              const isResetting = resetting === cfg.doc_type
+              return (
+                <div key={cfg.doc_type} className="rounded-lg border p-4 space-y-3">
+                  {/* Header */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-gray-700">
+                      {DOC_LABELS[cfg.doc_type] || cfg.doc_type}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-400">
+                        当前序号：<span className="font-mono font-medium text-gray-600">{cfg.current_seq}</span>
+                      </span>
+                      <button
+                        type="button"
+                        className="text-xs text-red-400 hover:text-red-600 flex items-center gap-1 disabled:opacity-40"
+                        onClick={() => handleReset(cfg.doc_type)}
+                        disabled={!!isResetting}
+                        title="重置序号至 0"
+                      >
+                        {isResetting
+                          ? <Loader2 className="w-3 h-3 animate-spin" />
+                          : <RotateCcw className="w-3 h-3" />}
+                        重置
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Controls */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div>
+                      <label className="text-xs text-gray-500 block mb-1">前缀</label>
+                      <Input
+                        className="h-8 text-sm font-mono"
+                        value={cfg.prefix}
+                        maxLength={10}
+                        onChange={e => patch(cfg.doc_type, 'prefix', e.target.value.toUpperCase())}
+                        placeholder="Q"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 block mb-1">年份格式</label>
+                      <Select
+                        value={cfg.year_format}
+                        onValueChange={v => patch(cfg.doc_type, 'year_format', v as YearFormat)}
+                      >
+                        <SelectTrigger className="h-8 text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {YEAR_FORMAT_OPTIONS.map(o => (
+                            <SelectItem key={o.value} value={o.value}>
+                              {o.label}
+                              <span className="ml-1 text-gray-400 text-xs">({o.example})</span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 block mb-1">序号位数</label>
+                      <Select
+                        value={String(cfg.digits)}
+                        onValueChange={v => patch(cfg.doc_type, 'digits', Number(v))}
+                      >
+                        <SelectTrigger className="h-8 text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {[2, 3, 4, 5].map(n => (
+                            <SelectItem key={n} value={String(n)}>{n} 位</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 block mb-1">按年重置</label>
+                      <button
+                        type="button"
+                        className={`h-8 w-full rounded-md border text-sm font-medium transition-colors ${
+                          cfg.reset_yearly
+                            ? 'bg-blue-50 border-blue-300 text-blue-700'
+                            : 'bg-gray-50 border-gray-200 text-gray-500'
+                        }`}
+                        onClick={() => patch(cfg.doc_type, 'reset_yearly', !cfg.reset_yearly)}
+                      >
+                        {cfg.reset_yearly ? '✓ 每年重置' : '不重置'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Preview + save */}
+                  <div className="flex items-center justify-between pt-1">
+                    <div className="text-xs text-gray-500">
+                      下一张预览：
+                      <span className="ml-1.5 font-mono font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
+                        {preview}
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => handleSave(cfg)}
+                      disabled={!!isSaving}
+                    >
+                      {isSaving ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
+                      保存格式
+                    </Button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }

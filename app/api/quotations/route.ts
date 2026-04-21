@@ -1,14 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getAuthUser, createAdminClient } from '@/lib/supabase/api-auth'
-
-function generateQuotationNumber(): string {
-  const date = new Date()
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0')
-  return `LS-${y}${m}${d}-${random}`
-}
+import { getNextDocNumber, docKindToType } from '@/lib/docNumber'
 
 export async function GET(request: Request) {
   try {
@@ -101,7 +93,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: '客户、贸易术语和产品为必填' }, { status: 400 })
     }
 
-    const quotation_number = generateQuotationNumber()
+    const docType = docKindToType(document_kind)
+    const quotation_number = await getNextDocNumber(user.id, docType)
 
     const baseInsert = {
       user_id: user.id,
