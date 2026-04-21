@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import { Sidebar } from '@/components/Sidebar'
 import { UserProfileProvider } from '@/contexts/UserProfileContext'
 import type { UserProfile } from '@/contexts/UserProfileContext'
+import { OnboardingRedirect } from '@/components/OnboardingRedirect'
 
 export default async function AppLayout({
   children,
@@ -28,8 +29,12 @@ export default async function AppLayout({
 
   const companyName = (profile as UserProfile | null)?.company_name || ''
 
+  const isNewUser = !companyName
+
   return (
     <UserProfileProvider initialProfile={profile as UserProfile | null}>
+      {/* Redirect new users (no company set up yet) to the onboarding wizard */}
+      {isNewUser && <OnboardingRedirect />}
       <div className="min-h-screen bg-gray-50">
         <Sidebar companyName={companyName} />
         <main className="md:pl-64">
