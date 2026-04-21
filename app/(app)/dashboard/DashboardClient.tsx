@@ -1,10 +1,12 @@
 'use client'
 
 import Link from 'next/link'
-import { Calculator, Package, Users, Building2, TrendingUp, FileText, ArrowRight } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Calculator, Package, Users, Building2, TrendingUp, FileText, ArrowRight, Bell, CheckCircle2, Plus } from 'lucide-react'
 import { formatDateShort } from '@/lib/format'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { AddTaskDialog, type Task } from '@/components/AddTaskDialog'
 import {
   ResponsiveContainer,
   LineChart,
@@ -39,6 +41,115 @@ interface DashboardClientProps {
   quotesByStatus: { name: string; value: number }[]
 }
 
+function getTodayStr() {
+  return new Date().toISOString().split('T')[0]
+}
+
+function dueBadgeClass(dateStr: string) {
+  const today = getTodayStr()
+  if (dateStr < today) return 'bg-red-100 text-red-600'
+  if (dateStr === today) return 'bg-orange-100 text-orange-600'
+  return 'bg-gray-100 text-gray-500'
+}
+
+function formatDueDateShort(dateStr: string) {
+  const today = getTodayStr()
+  const [, mm, dd] = dateStr.split('-')
+  if (dateStr === today) return '今天'
+  if (dateStr < today) return `逾期 ${mm}/${dd}`
+  return `${mm}/${dd}`
+}
+
+function TasksWidget() {
+  const [tasks, setTasks] = useState<Task[]>([])
+  const [overdueCount, setOverdueCount] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [dialogOpen, setDialogOpen] = useState(false)
+
+  const fetchTasks = async () => {
+    try {
+      const res = await fetch('/api/tasks?status=pending&limit=10')
+      const data = await res.json()
+      if (!data.error) {
+        setTasks(data.tasks || [])
+        setOverdueCount(data.overdue_count || 0)
+      }
+    } catch {
+      // silently fail
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { fetchTasks() }, [])
+
+  const displayTasks = tasks.slice(0, 3)
+
+  return (
+    <>
+      <Card className="border-amber-200 bg-amber-50/30">
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <div className="flex items-center gap-2">
+            <Bell className="w-5 h-5 text-amber-500" />
+            <CardTitle className="text-base">待处理跟进</CardTitle>
+            {overdueCount > 0 && (
+              <span className="text-xs bg-red-100 text-red-600 font-semibold px-2 py-0.5 rounded-full">
+                {overdueCount} 项已逾期
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setDialogOpen(true)}>
+              <Plus className="mr-1 h-3.5 w-3.5" />
+              添加提醒
+            </Button>
+            <Link href="/tasks">
+              <Button variant="outline" size="sm" className="h-7 text-xs">
+                查看全部
+                <ArrowRight className="ml-1 h-3.5 w-3.5" />
+              </Button>
+            </Link>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <p className="text-sm text-gray-400 py-2">加载中...</p>
+          ) : displayTasks.length === 0 ? (
+            <p className="text-sm text-gray-400 py-2">
+              暂无待处理提醒 · 从报价或客户页面添加
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {displayTasks.map((task) => (
+                <div key={task.id} className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-gray-300 flex-shrink-0" />
+                  <span className="text-sm flex-1 truncate">{task.title}</span>
+                  <span className={`text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${dueBadgeClass(task.due_date)}`}>
+                    {formatDueDateShort(task.due_date)}
+                  </span>
+                </div>
+              ))}
+              {tasks.length > 3 && (
+                <Link href="/tasks" className="text-xs text-blue-500 hover:underline block pt-1">
+                  还有 {tasks.length - 3} 条提醒
+                </Link>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <AddTaskDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        onCreated={(task) => {
+          setTasks((prev) => [task, ...prev])
+        }}
+      />
+    </>
+  )
+}
+
 const STATUS_COLORS: Record<string, string> = {
   '草稿': '#9ca3af',
   '已发送': '#3b82f6',
@@ -68,6 +179,9 @@ export function DashboardClient({
           {new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}
         </div>
       </div>
+
+      {/* Tasks Widget */}
+      <TasksWidget />
 
       {/* Quick Actions */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

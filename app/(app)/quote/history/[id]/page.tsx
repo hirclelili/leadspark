@@ -5,7 +5,7 @@ import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, Download, Building, Loader2, FileText,
-  CreditCard, Package, Truck, Hash, Copy, ChevronDown, Send, Sparkles, ClipboardCopy, Ship, FileSpreadsheet
+  CreditCard, Package, Truck, Hash, Copy, ChevronDown, Send, Sparkles, ClipboardCopy, Ship, FileSpreadsheet, Bell
 } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -24,6 +24,7 @@ import { AiSidePanel } from '@/components/AiSidePanel'
 import { exportQuoteExcel } from '@/lib/exportQuoteExcel'
 import { useUserProfile } from '@/contexts/UserProfileContext'
 import { QUOTE_STATUS_CONFIG, formatDate } from '@/lib/format'
+import { AddTaskDialog } from '@/components/AddTaskDialog'
 
 const STATUS_CONFIG = QUOTE_STATUS_CONFIG
 type QuoteStatus = keyof typeof STATUS_CONFIG
@@ -108,6 +109,9 @@ export default function QuotationDetailPage() {
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
   const [aiGenerating, setAiGenerating] = useState(false)
   const [aiEmailResult, setAiEmailResult] = useState<{ subject: string; body: string } | null>(null)
+
+  // Task dialog
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false)
 
   const handleGenerateReply = async (q: QuotationDetail) => {
     setAiGenerating(true)
@@ -485,6 +489,10 @@ export default function QuotationDetailPage() {
                 <Sparkles className="mr-2 h-4 w-4 text-blue-500" />
                 AI 生成回复邮件
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setTaskDialogOpen(true)}>
+                <Bell className="mr-2 h-4 w-4 text-amber-500" />
+                设置跟进提醒
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={handleDuplicate}>
                 <Copy className="mr-2 h-4 w-4" />
                 复用此报价
@@ -822,6 +830,16 @@ export default function QuotationDetailPage() {
           )}
         </div>
       </AiSidePanel>
+
+      <AddTaskDialog
+        open={taskDialogOpen}
+        onOpenChange={setTaskDialogOpen}
+        defaultTitle={`跟进 ${quotation.quotation_number} 报价`}
+        quotationId={quotation.id}
+        quotationNumber={quotation.quotation_number}
+        customerId={quotation.customer_id || undefined}
+        customerName={quotation.customers?.company_name}
+      />
     </div>
   )
 }

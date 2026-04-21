@@ -15,8 +15,9 @@ import {
   LogOut,
   Sparkles,
   Bot,
+  Bell,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
@@ -25,11 +26,41 @@ const navItems = [
   { href: '/dashboard', label: '工作台', icon: LayoutDashboard },
   { href: '/quote', label: '新建报价', icon: Calculator },
   { href: '/quote/history', label: '订单跟进', icon: FileText },
+  { href: '/tasks', label: '跟进提醒', icon: Bell },
   { href: '/products', label: '产品库', icon: Package },
   { href: '/customers', label: '客户管理', icon: Users },
   { href: '/ai', label: 'AI 助手', icon: Bot },
   { href: '/settings', label: '企业资料', icon: Building2 },
 ]
+
+function TaskBadge() {
+  const [overdueCount, setOverdueCount] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    const fetchOverdue = async () => {
+      try {
+        const res = await fetch('/api/tasks?status=pending&limit=1')
+        const data = await res.json()
+        if (!cancelled && !data.error) {
+          setOverdueCount(data.overdue_count || 0)
+        }
+      } catch {
+        // silently fail
+      }
+    }
+    fetchOverdue()
+    return () => { cancelled = true }
+  }, [])
+
+  if (overdueCount <= 0) return null
+
+  return (
+    <span className="ml-auto flex-shrink-0 min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold px-1">
+      {overdueCount > 99 ? '99+' : overdueCount}
+    </span>
+  )
+}
 
 interface SidebarProps {
   companyName?: string
@@ -115,6 +146,7 @@ export function Sidebar({ companyName }: SidebarProps) {
                 >
                   <item.icon className="w-5 h-5" />
                   {item.label}
+                  {item.href === '/tasks' && <TaskBadge />}
                 </Link>
               )
             })}

@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import {
   ArrowLeft, Building, Mail, Phone, Globe, Calendar, FileText,
-  MessageSquare, Loader2, Plus, Edit, Trash2, Sparkles, ClipboardCopy
+  MessageSquare, Loader2, Plus, Edit, Trash2, Sparkles, ClipboardCopy, Bell
 } from 'lucide-react'
 import { useUserProfile } from '@/contexts/UserProfileContext'
 import { formatDate } from '@/lib/format'
@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/select'
 import { toast } from 'sonner'
 import { AiSidePanel } from '@/components/AiSidePanel'
+import { AddTaskDialog } from '@/components/AddTaskDialog'
 
 interface Customer {
   id: string
@@ -87,6 +88,9 @@ export default function CustomerDetailPage() {
   // Remark input
   const [remarkInput, setRemarkInput] = useState('')
   const [addingRemark, setAddingRemark] = useState(false)
+
+  // Task dialog
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false)
 
   // AI side panel
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
@@ -307,6 +311,10 @@ export default function CustomerDetailPage() {
             <CardTitle>客户信息</CardTitle>
             {!editing ? (
               <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => setTaskDialogOpen(true)}>
+                  <Bell className="mr-1.5 h-3.5 w-3.5 text-amber-500" />
+                  设置跟进提醒
+                </Button>
                 <Button variant="outline" size="sm" onClick={() => openAiPanel('reply')}>
                   <Sparkles className="mr-1.5 h-3.5 w-3.5 text-blue-500" />
                   AI 报价邮件
@@ -631,6 +639,14 @@ export default function CustomerDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Task Dialog */}
+      <AddTaskDialog
+        open={taskDialogOpen}
+        onOpenChange={setTaskDialogOpen}
+        customerId={customer?.id}
+        customerName={customer?.company_name}
+      />
 
       {/* AI 侧边面板 */}
       <AiSidePanel
