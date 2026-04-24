@@ -16,8 +16,8 @@ import {
 } from '@/components/ui/select'
 import { toast } from 'sonner'
 import { CURRENCY_OPTIONS } from '@/lib/currencies'
-import { previewNextDocNumber } from '@/lib/docNumber'
-import type { DocNumberConfig, YearFormat } from '@/lib/docNumber'
+import { previewNextDocNumber } from '@/lib/docNumber.shared'
+import type { DocNumberConfig, YearFormat } from '@/lib/docNumber.shared'
 
 interface UserProfile {
   id?: string
