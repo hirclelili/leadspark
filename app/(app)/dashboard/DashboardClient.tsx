@@ -2,11 +2,12 @@
 
 import Link from 'next/link'
 import { useState, useEffect } from 'react'
-import { Calculator, Package, Users, Building2, TrendingUp, FileText, ArrowRight, Bell, CheckCircle2, Plus } from 'lucide-react'
+import { Calculator, Package, Users, Building2, TrendingUp, FileText, ArrowRight, Bell, CheckCircle2, Plus, Sparkles, AlertTriangle, Copy, Check, Loader2 } from 'lucide-react'
 import { formatDateShort } from '@/lib/format'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { AddTaskDialog, type Task } from '@/components/AddTaskDialog'
+import { toast } from 'sonner'
 import {
   ResponsiveContainer,
   LineChart,
@@ -33,12 +34,154 @@ interface Stats {
   }
 }
 
+interface ExpiringQuote {
+  id: string
+  quotation_number: string
+  daysLeft: number
+  customers?: { company_name: string } | null
+}
+
 interface DashboardClientProps {
   companyName: string
   stats: Stats
   recentQuotations: any[]
   monthlyData: { month: string; total: number }[]
   quotesByStatus: { name: string; value: number }[]
+  expiringQuotes: ExpiringQuote[]
+}
+
+function AiFollowUpPanel({ quotationId, onClose }: { quotationId: string; onClose: () => void }) {
+  const [loading, setLoading] = useState(true)
+  const [result, setResult] = useState<{ subject: string; body: string } | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    const generate = async () => {
+      try {
+        const res = await fetch('/api/ai/follow-up', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ quotation_id: quotationId, follow_up_type: 'quote_expiry' }),
+        })
+        const data = await res.json()
+        if (data.error) { toast.error(data.error); onClose(); return }
+        setResult(data)
+      } catch {
+        toast.error('生成失败，请重试')
+        onClose()
+      } finally {
+        setLoading(false)
+      }
+    }
+    generate()
+  }, [quotationId, onClose])
+
+  const handleCopy = () => {
+    if (!result) return
+    navigator.clipboard.writeText(`Subject: ${result.subject}\n\n${result.body}`)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+    toast.success('已复制到剪贴板')
+  }
+
+  return (
+    <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm">
+      {loading ? (
+        <div className="flex items-center gap-2 text-blue-600 py-2">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <span>AI 正在起草邮件...</span>
+        </div>
+      ) : result ? (
+        <div className="space-y-2">
+          <div>
+            <span className="text-xs text-blue-500 font-medium uppercase tracking-wide">主题</span>
+            <p className="font-medium text-gray-800 mt-0.5">{result.subject}</p>
+          </div>
+          <div>
+            <span className="text-xs text-blue-500 font-medium uppercase tracking-wide">正文</span>
+            <pre className="text-xs text-gray-700 mt-0.5 whitespace-pre-wrap font-sans leading-relaxed max-h-48 overflow-y-auto">{result.body}</pre>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleCopy}>
+              {copied ? <Check className="w-3.5 h-3.5 mr-1 text-green-500" /> : <Copy className="w-3.5 h-3.5 mr-1" />}
+              {copied ? '已复制' : '复制邮件'}
+            </Button>
+            <Button size="sm" variant="ghost" className="h-7 text-xs text-gray-400" onClick={onClose}>
+              关闭
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function InsightsWidget({ expiringQuotes, overdueCount }: { expiringQuotes: ExpiringQuote[]; overdueCount: number }) {
+  const [openPanel, setOpenPanel] = useState<string | null>(null)
+
+  const hasInsights = expiringQuotes.length > 0 || overdueCount > 0
+  if (!hasInsights) return null
+
+  return (
+    <Card className="border-amber-200 bg-amber-50/40">
+      <CardHeader className="pb-3">
+        <div className="flex items-center gap-2">
+          <Sparkles className="w-5 h-5 text-amber-500" />
+          <CardTitle className="text-base">AI 待处理事项</CardTitle>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {expiringQuotes.map((q) => (
+          <div key={q.id}>
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+                <div className="text-sm">
+                  <span className="font-medium">{q.quotation_number}</span>
+                  {q.customers?.company_name && (
+                    <span className="text-gray-500">（{q.customers.company_name}）</span>
+                  )}
+                  <span className="text-amber-600 ml-1">
+                    {q.daysLeft === 0 ? '今天到期' : `${q.daysLeft} 天后到期`}
+                  </span>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs flex-shrink-0 border-amber-300 hover:bg-amber-100"
+                onClick={() => setOpenPanel(openPanel === q.id ? null : q.id)}
+              >
+                <Sparkles className="w-3 h-3 mr-1 text-amber-500" />
+                {openPanel === q.id ? '收起' : 'AI 起草'}
+              </Button>
+            </div>
+            {openPanel === q.id && (
+              <AiFollowUpPanel quotationId={q.id} onClose={() => setOpenPanel(null)} />
+            )}
+          </div>
+        ))}
+
+        {overdueCount > 0 && (
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
+              <span className="text-sm">
+                <span className="font-medium text-red-600">{overdueCount} 项</span>
+                <span className="text-gray-600"> 跟进提醒已逾期</span>
+              </span>
+            </div>
+            <Link href="/tasks">
+              <Button size="sm" variant="outline" className="h-7 text-xs">
+                查看任务
+                <ArrowRight className="w-3 h-3 ml-1" />
+              </Button>
+            </Link>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
 }
 
 function getTodayStr() {
@@ -60,7 +203,7 @@ function formatDueDateShort(dateStr: string) {
   return `${mm}/${dd}`
 }
 
-function TasksWidget() {
+function TasksWidget({ onOverdueCount }: { onOverdueCount?: (n: number) => void }) {
   const [tasks, setTasks] = useState<Task[]>([])
   const [overdueCount, setOverdueCount] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -73,6 +216,7 @@ function TasksWidget() {
       if (!data.error) {
         setTasks(data.tasks || [])
         setOverdueCount(data.overdue_count || 0)
+        onOverdueCount?.(data.overdue_count || 0)
       }
     } catch {
       // silently fail
@@ -164,8 +308,10 @@ export function DashboardClient({
   recentQuotations,
   monthlyData,
   quotesByStatus,
+  expiringQuotes,
 }: DashboardClientProps) {
   const hasChartData = monthlyData.some((d) => d.total > 0)
+  const [overdueCount, setOverdueCount] = useState(0)
 
   return (
     <div className="p-8 pt-16 md:pt-8 space-y-6">
@@ -180,8 +326,11 @@ export function DashboardClient({
         </div>
       </div>
 
+      {/* AI Insights Widget */}
+      <InsightsWidget expiringQuotes={expiringQuotes} overdueCount={overdueCount} />
+
       {/* Tasks Widget */}
-      <TasksWidget />
+      <TasksWidget onOverdueCount={setOverdueCount} />
 
       {/* Quick Actions */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

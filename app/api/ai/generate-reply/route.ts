@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getAuthUser } from '@/lib/supabase/api-auth'
+import { getAuthUser, createAdminClient } from '@/lib/supabase/api-auth'
 import { deepseek, DEEPSEEK_MODEL } from '@/lib/deepseek'
 
 interface QuotationInput {
@@ -23,6 +23,7 @@ interface RequestBody {
   customer: {
     company_name: string
     contact_name?: string
+    id?: string
   }
   company_name: string
 }
@@ -39,6 +40,37 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: '缺少必要参数' }, { status: 400 })
     }
 
+    const supabase = createAdminClient()
+
+    // Fetch user profile for signature info + optional customer remarks in parallel
+    const [profileResult, remarksResult] = await Promise.all([
+      supabase
+        .from('user_profiles')
+        .select('company_name, phone, email, website, address')
+        .eq('user_id', user.id)
+        .single(),
+      customer.id
+        ? supabase
+            .from('customer_remarks')
+            .select('content, created_at')
+            .eq('customer_id', customer.id)
+            .order('created_at', { ascending: false })
+            .limit(3)
+        : Promise.resolve({ data: null }),
+    ])
+
+    const profile = profileResult.data
+    const remarks = remarksResult.data
+
+    // Build company signature
+    const senderCompany = profile?.company_name || company_name
+    const signatureParts: string[] = []
+    if (profile?.phone) signatureParts.push(`Tel: ${profile.phone}`)
+    if (profile?.email) signatureParts.push(`Email: ${profile.email}`)
+    if (profile?.website) signatureParts.push(profile.website)
+    const contactLine = signatureParts.join(' | ')
+
+    // Build products table text
     const productsText = (quotation.products || [])
       .map(
         (p) =>
@@ -46,35 +78,44 @@ export async function POST(request: Request) {
       )
       .join('\n')
 
-    const prompt = `Generate a professional English quotation reply email for an export business.
+    // Build optional customer background
+    let customerBackground = ''
+    if (remarks && remarks.length > 0) {
+      customerBackground = `\nBackground notes on this customer:\n${(remarks as any[]).map((r: any) => `- ${r.content}`).join('\n')}`
+    }
 
-Seller company: ${company_name}
-Buyer company: ${customer.company_name}
-Buyer contact: ${customer.contact_name || 'Sir/Madam'}
-Quotation number: ${quotation.quotation_number || 'N/A'}
-Trade term: ${quotation.trade_term}
-Currency: ${quotation.currency}
-Products:
+    const prompt = `Write a professional English quotation reply email.
+
+SELLER: ${senderCompany}
+BUYER: ${customer.company_name}
+CONTACT: ${customer.contact_name || 'Sir/Madam'}
+QUOTATION NO.: ${quotation.quotation_number || 'N/A'}
+TRADE TERM: ${quotation.trade_term}
+CURRENCY: ${quotation.currency}
+PRODUCTS:
 ${productsText}
-Total amount: ${quotation.currency} ${quotation.total_amount_foreign}
-Payment terms: ${quotation.payment_terms || 'T/T 30% deposit, 70% before shipment'}
-Delivery time: ${quotation.delivery_time || 'To be confirmed'}
-Validity: ${quotation.validity_days || 30} days
+TOTAL: ${quotation.currency} ${quotation.total_amount_foreign}
+PAYMENT: ${quotation.payment_terms || 'T/T 30% deposit, 70% before shipment'}
+DELIVERY: ${quotation.delivery_time || 'To be confirmed'}
+VALIDITY: ${quotation.validity_days || 30} days from today
+${customerBackground}
 
-Return ONLY a valid JSON object:
-{
-  "email_subject": string,
-  "email_body": string
-}
+REQUIRED EMAIL STRUCTURE (5 parts):
+1. Opening: Warm greeting + thank them for their inquiry/interest
+2. Quotation reference: Mention quotation number and trade term
+3. Product summary: Brief confirmation of key items (do NOT repeat the full table — one sentence)
+4. Terms: Payment terms, delivery time, and validity period
+5. Sign-off:
+   Best regards,
+   ${senderCompany}
+   ${contactLine}
 
-The email should be:
-- Professional and courteous
-- Include all quotation details clearly formatted
-- Mention validity period
-- End with a call to action
-- Use proper business email format with greeting and sign-off
-- The email_body should use \\n for line breaks
-Return ONLY valid JSON, no markdown fences.`
+RULES:
+- Professional and warm, under 250 words
+- Do NOT use any placeholder text like [Your Name] or brackets — use the actual data
+- Output ONLY valid JSON: { "email_subject": "...", "email_body": "..." }
+- Use \\n for line breaks
+- Return ONLY JSON, no markdown fences`
 
     const completion = await deepseek.chat.completions.create({
       model: DEEPSEEK_MODEL,
@@ -89,7 +130,7 @@ Return ONLY valid JSON, no markdown fences.`
           content: prompt,
         },
       ],
-      temperature: 0.7,
+      temperature: 0.4,
     })
 
     const rawContent = completion.choices[0]?.message?.content || ''

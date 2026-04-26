@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Bell, Plus, Trash2, CheckCircle2 } from 'lucide-react'
+import { Bell, Plus, Trash2, CheckCircle2, Sparkles, Copy, Check, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { toast } from 'sonner'
@@ -60,6 +60,72 @@ function groupPendingTasks(tasks: Task[]): TaskGroup[] {
   return groups
 }
 
+function AiDraftPanel({ quotationId, onClose }: { quotationId: string; onClose: () => void }) {
+  const [loading, setLoading] = useState(true)
+  const [result, setResult] = useState<{ subject: string; body: string } | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    const generate = async () => {
+      try {
+        const res = await fetch('/api/ai/follow-up', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ quotation_id: quotationId, follow_up_type: 'no_reply' }),
+        })
+        const data = await res.json()
+        if (data.error) { toast.error(data.error); onClose(); return }
+        setResult(data)
+      } catch {
+        toast.error('生成失败，请重试')
+        onClose()
+      } finally {
+        setLoading(false)
+      }
+    }
+    generate()
+  }, [quotationId, onClose])
+
+  const handleCopy = () => {
+    if (!result) return
+    navigator.clipboard.writeText(`Subject: ${result.subject}\n\n${result.body}`)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+    toast.success('已复制到剪贴板')
+  }
+
+  return (
+    <div className="mt-2 ml-8 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm">
+      {loading ? (
+        <div className="flex items-center gap-2 text-blue-600 py-1">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <span className="text-sm">AI 正在起草跟进邮件...</span>
+        </div>
+      ) : result ? (
+        <div className="space-y-2">
+          <div>
+            <span className="text-xs text-blue-500 font-medium uppercase tracking-wide">主题</span>
+            <p className="font-medium text-gray-800 mt-0.5 text-sm">{result.subject}</p>
+          </div>
+          <div>
+            <span className="text-xs text-blue-500 font-medium uppercase tracking-wide">正文</span>
+            <pre className="text-xs text-gray-700 mt-0.5 whitespace-pre-wrap font-sans leading-relaxed max-h-40 overflow-y-auto">{result.body}</pre>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleCopy}>
+              {copied ? <Check className="w-3.5 h-3.5 mr-1 text-green-500" /> : <Copy className="w-3.5 h-3.5 mr-1" />}
+              {copied ? '已复制' : '复制邮件'}
+            </Button>
+            <Button size="sm" variant="ghost" className="h-7 text-xs text-gray-400" onClick={onClose}>
+              关闭
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function TaskCard({
   task,
   onToggle,
@@ -72,59 +138,81 @@ function TaskCard({
   const completed = !!task.completed_at
   const today = getTodayStr()
   const overdue = !completed && task.due_date < today
+  const [aiOpen, setAiOpen] = useState(false)
 
   return (
-    <div className="flex items-start gap-3 p-3 rounded-lg border bg-white hover:bg-gray-50 transition-colors">
-      <button
-        onClick={() => onToggle(task)}
-        className={`mt-0.5 flex-shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${
-          completed
-            ? 'border-green-500 bg-green-500 text-white'
-            : overdue
-            ? 'border-red-400 hover:border-red-500'
-            : 'border-gray-300 hover:border-blue-500'
-        }`}
-      >
-        {completed && <CheckCircle2 className="w-3.5 h-3.5" />}
-      </button>
+    <div className="rounded-lg border bg-white">
+      <div className="flex items-start gap-3 p-3 hover:bg-gray-50 transition-colors rounded-lg">
+        <button
+          onClick={() => onToggle(task)}
+          className={`mt-0.5 flex-shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${
+            completed
+              ? 'border-green-500 bg-green-500 text-white'
+              : overdue
+              ? 'border-red-400 hover:border-red-500'
+              : 'border-gray-300 hover:border-blue-500'
+          }`}
+        >
+          {completed && <CheckCircle2 className="w-3.5 h-3.5" />}
+        </button>
 
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className={`text-sm font-medium ${completed ? 'line-through text-gray-400' : ''}`}>
-            {task.title}
-          </span>
-          <span
-            className={`text-xs px-1.5 py-0.5 rounded font-medium ${dueBadgeClass(task.due_date, completed)}`}
-          >
-            {formatDueDate(task.due_date)}
-          </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`text-sm font-medium ${completed ? 'line-through text-gray-400' : ''}`}>
+              {task.title}
+            </span>
+            <span
+              className={`text-xs px-1.5 py-0.5 rounded font-medium ${dueBadgeClass(task.due_date, completed)}`}
+            >
+              {formatDueDate(task.due_date)}
+            </span>
+          </div>
+
+          {(task.quotations?.quotation_number || task.customers?.company_name) && (
+            <div className="text-xs text-gray-400 mt-0.5">
+              {task.quotations?.quotation_number && (
+                <span>{task.quotations.quotation_number}</span>
+              )}
+              {task.quotations?.quotation_number && task.customers?.company_name && (
+                <span className="mx-1">·</span>
+              )}
+              {task.customers?.company_name && (
+                <span>{task.customers.company_name}</span>
+              )}
+            </div>
+          )}
+
+          {task.note && (
+            <p className="text-xs text-gray-500 mt-0.5 truncate">{task.note}</p>
+          )}
         </div>
 
-        {(task.quotations?.quotation_number || task.customers?.company_name) && (
-          <div className="text-xs text-gray-400 mt-0.5">
-            {task.quotations?.quotation_number && (
-              <span>{task.quotations.quotation_number}</span>
-            )}
-            {task.quotations?.quotation_number && task.customers?.company_name && (
-              <span className="mx-1">·</span>
-            )}
-            {task.customers?.company_name && (
-              <span>{task.customers.company_name}</span>
-            )}
-          </div>
-        )}
-
-        {task.note && (
-          <p className="text-xs text-gray-500 mt-0.5 truncate">{task.note}</p>
-        )}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {task.quotation_id && !completed && (
+            <button
+              onClick={() => setAiOpen((v) => !v)}
+              className={`p-1.5 rounded transition-colors text-xs flex items-center gap-1 ${
+                aiOpen
+                  ? 'bg-blue-100 text-blue-600'
+                  : 'text-gray-300 hover:text-blue-500 hover:bg-blue-50'
+              }`}
+              title="AI 起草跟进邮件"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+            </button>
+          )}
+          <button
+            onClick={() => onDelete(task.id)}
+            className="p-1 text-gray-300 hover:text-red-400 transition-colors rounded"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
-      <button
-        onClick={() => onDelete(task.id)}
-        className="flex-shrink-0 p-1 text-gray-300 hover:text-red-400 transition-colors rounded"
-      >
-        <Trash2 className="w-3.5 h-3.5" />
-      </button>
+      {aiOpen && task.quotation_id && (
+        <AiDraftPanel quotationId={task.quotation_id} onClose={() => setAiOpen(false)} />
+      )}
     </div>
   )
 }

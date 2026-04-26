@@ -18,6 +18,10 @@ export default async function DashboardPage() {
   sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
   sixMonthsAgo.setDate(1)
 
+  // Date range for expiring quotes check
+  const thirtyDaysAgo = new Date()
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+
   // Run all DB queries in parallel — reduces dashboard TTFB significantly
   const [
     { data: profile },
@@ -26,6 +30,7 @@ export default async function DashboardPage() {
     { count: totalQuotations },
     { data: recentQuotations },
     { data: chartQuotations },
+    { data: recentQuotationsForInsights },
   ] = await Promise.all([
     supabase.from('user_profiles').select('company_name').eq('user_id', user.id).single(),
     supabase.from('products').select('id', { count: 'exact', head: true }).eq('user_id', user.id),
@@ -37,9 +42,31 @@ export default async function DashboardPage() {
     supabase
       .from('quotations').select('created_at, total_amount_foreign, status')
       .eq('user_id', user.id).gte('created_at', sixMonthsAgo.toISOString()).order('created_at'),
+    supabase
+      .from('quotations')
+      .select('id, quotation_number, validity_days, created_at, status, customers(company_name)')
+      .eq('user_id', user.id)
+      .gte('created_at', thirtyDaysAgo.toISOString())
+      .order('created_at', { ascending: false }),
   ])
 
   const companyName = profile?.company_name || ''
+
+  // Compute expiring quotes (validity expires within 5 days)
+  const today = new Date()
+  const expiringQuotes = (recentQuotationsForInsights || []).filter((q: any) => {
+    const validity = q.validity_days || 30
+    const created = new Date(q.created_at)
+    const expiresAt = new Date(created.getTime() + validity * 24 * 60 * 60 * 1000)
+    const daysLeft = Math.ceil((expiresAt.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+    return daysLeft >= 0 && daysLeft <= 5 && q.status !== 'won' && q.status !== 'lost'
+  }).map((q: any) => {
+    const validity = q.validity_days || 30
+    const created = new Date(q.created_at)
+    const expiresAt = new Date(created.getTime() + validity * 24 * 60 * 60 * 1000)
+    const daysLeft = Math.ceil((expiresAt.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+    return { ...q, daysLeft }
+  })
 
   // Aggregate monthly totals (USD-equivalent)
   const monthMap: Record<string, number> = {}
@@ -93,6 +120,7 @@ export default async function DashboardPage() {
       recentQuotations={recentQuotations || []}
       monthlyData={monthlyData}
       quotesByStatus={quotesByStatus}
+      expiringQuotes={expiringQuotes}
     />
   )
 }
