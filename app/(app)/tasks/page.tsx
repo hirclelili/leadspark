@@ -185,6 +185,7 @@ export default function TasksPage() {
       } else {
         setTasks((prev) => prev.map((t) => (t.id === task.id ? data : t)))
         if (nowCompleted) toast.success('已完成')
+        window.dispatchEvent(new Event('tasks-updated'))
       }
     } catch {
       setTasks((prev) => prev.map((t) => (t.id === task.id ? task : t)))
@@ -202,6 +203,7 @@ export default function TasksPage() {
         toast.error('删除失败')
       } else {
         toast.success('已删除')
+        window.dispatchEvent(new Event('tasks-updated'))
       }
     } catch {
       if (original) setTasks((prev) => [...prev, original])

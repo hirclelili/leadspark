@@ -50,7 +50,11 @@ function TaskBadge() {
       }
     }
     fetchOverdue()
-    return () => { cancelled = true }
+    window.addEventListener('tasks-updated', fetchOverdue)
+    return () => {
+      cancelled = true
+      window.removeEventListener('tasks-updated', fetchOverdue)
+    }
   }, [])
 
   if (overdueCount <= 0) return null

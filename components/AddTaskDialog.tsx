@@ -105,6 +105,7 @@ export function AddTaskDialog({
       toast.success('跟进提醒已添加')
       onCreated?.(data)
       onOpenChange(false)
+      window.dispatchEvent(new Event('tasks-updated'))
     } catch {
       toast.error('创建失败，请检查网络连接')
     } finally {
