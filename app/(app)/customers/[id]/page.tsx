@@ -43,7 +43,7 @@ interface Quotation {
   currency: string
   total_amount_foreign: number
   created_at: string
-  products?: Array<{ name: string; qty: number; unit: string; unit_price_foreign?: number }>
+  products?: Array<{ name: string; qty: number; unit: string; unit_price_foreign?: number; cost_price?: number }>
 }
 
 interface Remark {
@@ -100,6 +100,9 @@ export default function CustomerDetailPage() {
   const [aiNegotiateResult, setAiNegotiateResult] = useState('')
   const [negotiateMessage, setNegotiateMessage] = useState('')
   const [negotiateMinPrice, setNegotiateMinPrice] = useState('')
+  const [negotiateMarginInfo, setNegotiateMarginInfo] = useState<{
+    cost_price: number; quoted_price: number; margin_pct: number; margin_amt: number; suggested_floor: number
+  } | null>(null)
 
   useEffect(() => {
     if (id) {
@@ -245,10 +248,13 @@ export default function CustomerDetailPage() {
     if (!negotiateMessage.trim()) { toast.error('请填写客户议价消息'); return }
     setAiGenerating(true)
     setAiNegotiateResult('')
+    setNegotiateMarginInfo(null)
     try {
       const q = quotations[0]
-      const productName = q?.products?.[0]?.name || customer?.company_name || '产品'
-      const quotedPrice = q?.products?.[0]?.unit_price_foreign || 0
+      const p0 = q?.products?.[0]
+      const productName = p0?.name || customer?.company_name || '产品'
+      const quotedPrice = p0?.unit_price_foreign || 0
+      const costPrice = p0?.cost_price || 0
       const currency = q?.currency || 'USD'
 
       const res = await fetch('/api/ai/negotiate', {
@@ -259,12 +265,14 @@ export default function CustomerDetailPage() {
           product_name: productName,
           quoted_price: quotedPrice,
           currency,
+          cost_price: costPrice > 0 ? costPrice : undefined,
           min_price: negotiateMinPrice ? parseFloat(negotiateMinPrice) : undefined,
         }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || '生成失败')
       setAiNegotiateResult(data.reply || '')
+      if (data.margin_info) setNegotiateMarginInfo(data.margin_info)
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : '生成失败，请重试')
     } finally {
@@ -712,13 +720,31 @@ export default function CustomerDetailPage() {
           <div className="p-5 space-y-4">
             <p className="text-sm text-gray-500">粘贴客户的还价消息，AI 自动生成专业的议价回复邮件。</p>
 
-            {quotations[0] && (
-              <div className="bg-blue-50 rounded-lg p-3 text-xs text-blue-700 space-y-1">
-                <div>参考报价：{quotations[0].quotation_number}</div>
-                <div>产品：{quotations[0].products?.[0]?.name || '—'}</div>
-                <div>报价单价：{quotations[0].currency} {quotations[0].products?.[0]?.unit_price_foreign?.toFixed(4) || '—'}/{quotations[0].products?.[0]?.unit || 'pc'}</div>
-              </div>
-            )}
+            {quotations[0] && (() => {
+              const q = quotations[0]
+              const p0 = q.products?.[0]
+              const costPrice = p0?.cost_price
+              const quotedPrice = p0?.unit_price_foreign
+              const marginPct = costPrice && quotedPrice && quotedPrice > 0
+                ? (((quotedPrice - costPrice) / quotedPrice) * 100).toFixed(1)
+                : null
+              return (
+                <div className="bg-blue-50 rounded-lg p-3 text-xs text-blue-700 space-y-1.5">
+                  <div className="flex justify-between"><span className="text-blue-500">报价单</span><span>{q.quotation_number}</span></div>
+                  <div className="flex justify-between"><span className="text-blue-500">产品</span><span>{p0?.name || '—'}</span></div>
+                  <div className="flex justify-between"><span className="text-blue-500">报价单价</span><span>{q.currency} {quotedPrice?.toFixed(4) || '—'}/{p0?.unit || 'pc'}</span></div>
+                  {costPrice && costPrice > 0 && (
+                    <div className="flex justify-between"><span className="text-blue-500">成本价</span><span>¥{costPrice}</span></div>
+                  )}
+                  {marginPct && (
+                    <div className="flex justify-between font-medium border-t border-blue-200 pt-1 mt-1">
+                      <span className="text-blue-500">当前利润率</span>
+                      <span className={parseFloat(marginPct) < 15 ? 'text-orange-600' : 'text-green-600'}>{marginPct}%</span>
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
 
             <div className="space-y-2">
               <label className="text-sm font-medium">客户议价消息</label>
@@ -736,6 +762,30 @@ export default function CustomerDetailPage() {
               {aiGenerating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
               生成议价回复
             </Button>
+
+            {negotiateMarginInfo && (
+              <div className="bg-gray-50 border rounded-lg p-3 text-xs space-y-1.5">
+                <div className="font-medium text-gray-600 mb-1">利润空间分析</div>
+                <div className="flex justify-between text-gray-500">
+                  <span>报价</span>
+                  <span>{quotations[0]?.currency} {negotiateMarginInfo.quoted_price}</span>
+                </div>
+                <div className="flex justify-between text-gray-500">
+                  <span>成本</span>
+                  <span>¥{negotiateMarginInfo.cost_price}</span>
+                </div>
+                <div className="flex justify-between font-medium">
+                  <span>当前利润率</span>
+                  <span className={negotiateMarginInfo.margin_pct < 15 ? 'text-orange-600' : 'text-green-600'}>
+                    {negotiateMarginInfo.margin_pct}%
+                  </span>
+                </div>
+                <div className="flex justify-between text-gray-500 border-t pt-1">
+                  <span>建议底价（保留15%）</span>
+                  <span>{quotations[0]?.currency} {negotiateMarginInfo.suggested_floor.toFixed(4)}</span>
+                </div>
+              </div>
+            )}
 
             {aiNegotiateResult && (
               <div className="space-y-3">
