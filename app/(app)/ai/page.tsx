@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
-import { Bot, Sparkles, Send, Loader2, FileSearch, Mail, MessageSquare, User } from 'lucide-react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { Bot, Sparkles, Send, Loader2, FileSearch, Mail, MessageSquare, User, Link2, X, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from 'sonner'
@@ -11,6 +11,21 @@ import { useUserProfile } from '@/contexts/UserProfileContext'
 interface Message {
   role: 'user' | 'assistant'
   content: string
+}
+
+interface CustomerOption {
+  id: string
+  company_name: string
+  contact_name?: string
+  status?: string
+}
+
+interface QuotationOption {
+  id: string
+  quotation_number: string
+  document_kind?: string
+  currency?: string
+  total_amount_foreign?: number
 }
 
 const QUICK_ACTIONS = [
@@ -54,15 +69,24 @@ export default function AiPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const initializedRef = useRef(false)
 
-  useEffect(() => {
-    loadContext()
-  }, [])
+  // Bound context
+  const [boundCustomer, setBoundCustomer] = useState<CustomerOption | null>(null)
+  const [boundQuotation, setBoundQuotation] = useState<QuotationOption | null>(null)
+  const [showContextPanel, setShowContextPanel] = useState(false)
+
+  // Context panel data
+  const [customers, setCustomers] = useState<CustomerOption[]>([])
+  const [quotations, setQuotations] = useState<QuotationOption[]>([])
+  const [customerSearch, setCustomerSearch] = useState('')
+  const [loadingCustomers, setLoadingCustomers] = useState(false)
+  const [loadingQuotations, setLoadingQuotations] = useState(false)
+
+  useEffect(() => { loadContext() }, [])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  // Re-initialize welcome message once profile loads (context may arrive after mount)
   useEffect(() => {
     if (userProfile && !initializedRef.current && messages.length > 0) {
       initializedRef.current = true
@@ -77,23 +101,83 @@ export default function AiPage() {
 
   const loadContext = async () => {
     try {
-      // Use profile from context if available; otherwise fall back to a quick fetch
       const company = userProfile?.company_name || '您的公司'
-      const productsRes = await fetch('/api/products?limit=20')
+      const productsRes = await fetch('/api/products?limit=50')
       const productsData = productsRes.ok ? await productsRes.json() : null
       const productCount = productsData?.products?.length || 0
-      setContextInfo(`${company} · 已加载 ${productCount} 个产品`)
-
-      // Welcome message
-      setMessages([
-        {
-          role: 'assistant',
-          content: `您好！我是 ${company} 的 AI 销售助手 ✨\n\n我已加载您的公司信息和产品目录（${productCount} 个产品），可以帮您：\n\n• **解析询盘邮件** — 自动提取产品、数量、贸易术语等关键信息\n• **起草报价邮件** — 生成专业的英文报价回复\n• **议价回复** — 帮您处理客户还价，维护利润空间\n• **贸易咨询** — 解答关税、Incoterms、付款方式等问题\n\n点击下方快捷指令，或直接输入您的问题开始吧！`,
-        },
-      ])
+      setContextInfo(`${company} · ${productCount} 个产品`)
+      setMessages([{
+        role: 'assistant',
+        content: `您好！我是 ${company} 的 AI 销售助手 ✨\n\n我已加载您的公司信息和产品目录（${productCount} 个产品），可以帮您：\n\n• **解析询盘邮件** — 自动提取产品、数量、贸易术语等关键信息\n• **起草报价邮件** — 生成专业的英文报价回复\n• **议价回复** — 帮您处理客户还价，维护利润空间\n• **贸易咨询** — 解答关税、Incoterms、付款方式等问题\n\n💡 点击右上角"绑定上下文"可关联具体客户或报价单，让回答更有针对性。`,
+      }])
     } catch {
       setContextInfo('加载上下文失败')
     }
+  }
+
+  const fetchCustomers = useCallback(async (search = '') => {
+    setLoadingCustomers(true)
+    try {
+      const url = search
+        ? `/api/customers?search=${encodeURIComponent(search)}&limit=20`
+        : `/api/customers?limit=20`
+      const res = await fetch(url)
+      const data = await res.json()
+      setCustomers(data.customers || [])
+    } catch { /* silent */ } finally {
+      setLoadingCustomers(false)
+    }
+  }, [])
+
+  const fetchQuotations = useCallback(async (customerId?: string) => {
+    setLoadingQuotations(true)
+    try {
+      const url = customerId
+        ? `/api/quotations?customer_id=${customerId}&limit=10`
+        : `/api/quotations?limit=10`
+      const res = await fetch(url)
+      const data = await res.json()
+      setQuotations(data.quotations || [])
+    } catch { /* silent */ } finally {
+      setLoadingQuotations(false)
+    }
+  }, [])
+
+  const openContextPanel = () => {
+    setShowContextPanel(true)
+    fetchCustomers()
+    if (boundCustomer) fetchQuotations(boundCustomer.id)
+    else fetchQuotations()
+  }
+
+  const handleSelectCustomer = (c: CustomerOption | null) => {
+    setBoundCustomer(c)
+    setBoundQuotation(null)
+    if (c) fetchQuotations(c.id)
+    else fetchQuotations()
+    // Inject a context change notice into chat
+    if (c) {
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `✅ 已绑定客户：**${c.company_name}**${c.contact_name ? `（联系人：${c.contact_name}）` : ''}。接下来的对话我会结合该客户的历史报价和备注记录给出有针对性的建议。`,
+      }])
+    }
+  }
+
+  const handleSelectQuotation = (q: QuotationOption | null) => {
+    setBoundQuotation(q)
+    if (q) {
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `✅ 已绑定报价单：**${q.quotation_number}**${q.total_amount_foreign ? `（${q.currency} ${q.total_amount_foreign.toFixed(2)}）` : ''}。接下来我可以针对这份报价单回答问题、起草跟进邮件或协助议价。`,
+      }])
+    }
+  }
+
+  const clearContext = () => {
+    setBoundCustomer(null)
+    setBoundQuotation(null)
+    setShowContextPanel(false)
   }
 
   const handleSend = async () => {
@@ -112,6 +196,8 @@ export default function AiPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
+          customer_id: boundCustomer?.id,
+          quotation_id: boundQuotation?.id,
         }),
       })
       const data = await res.json()
@@ -119,7 +205,6 @@ export default function AiPage() {
       setMessages((prev) => [...prev, { role: 'assistant', content: data.reply }])
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : '发送失败，请重试')
-      // Remove the user message on error
       setMessages((prev) => prev.slice(0, -1))
       setInput(text)
     } finally {
@@ -139,7 +224,6 @@ export default function AiPage() {
     textareaRef.current?.focus()
   }
 
-  // Simple markdown-like rendering for bold and line breaks
   const renderContent = (content: string) => {
     return content.split('\n').map((line, i) => {
       const parts = line.split(/\*\*(.*?)\*\*/g)
@@ -154,6 +238,8 @@ export default function AiPage() {
     })
   }
 
+  const hasBoundContext = boundCustomer || boundQuotation
+
   return (
     <div className="flex flex-col h-screen pt-16 md:pt-0">
       {/* Header */}
@@ -167,14 +253,130 @@ export default function AiPage() {
             {contextInfo && <p className="text-xs text-gray-500">{contextInfo}</p>}
           </div>
         </div>
-        <Button variant="ghost" size="sm" className="text-xs text-gray-400" onClick={loadContext}>
-          重新加载上下文
+        <Button
+          variant={hasBoundContext ? 'default' : 'outline'}
+          size="sm"
+          className={cn('text-xs gap-1.5', hasBoundContext && 'bg-blue-600 hover:bg-blue-700')}
+          onClick={openContextPanel}
+        >
+          <Link2 className="w-3.5 h-3.5" />
+          {hasBoundContext ? '已绑定上下文' : '绑定上下文'}
+          <ChevronDown className="w-3 h-3 opacity-60" />
         </Button>
       </div>
 
+      {/* Bound context chips */}
+      {hasBoundContext && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 border-b text-xs">
+          <span className="text-blue-400">上下文：</span>
+          {boundCustomer && (
+            <span className="flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
+              👤 {boundCustomer.company_name}
+              <button onClick={() => { setBoundCustomer(null); setBoundQuotation(null) }} className="ml-0.5 hover:text-red-500">
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          )}
+          {boundQuotation && (
+            <span className="flex items-center gap-1 bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
+              📄 {boundQuotation.quotation_number}
+              <button onClick={() => setBoundQuotation(null)} className="ml-0.5 hover:text-red-500">
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          )}
+          <button onClick={clearContext} className="ml-auto text-gray-400 hover:text-gray-600">
+            清除全部
+          </button>
+        </div>
+      )}
+
+      {/* Context binding panel */}
+      {showContextPanel && (
+        <div className="flex-shrink-0 border-b bg-white px-4 py-4 shadow-sm">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-medium">绑定上下文</h3>
+            <button onClick={() => setShowContextPanel(false)} className="text-gray-400 hover:text-gray-600">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            {/* Customer selector */}
+            <div>
+              <label className="text-xs text-gray-500 mb-1.5 block">绑定客户</label>
+              <input
+                type="text"
+                placeholder="搜索客户名称..."
+                value={customerSearch}
+                onChange={(e) => {
+                  setCustomerSearch(e.target.value)
+                  fetchCustomers(e.target.value)
+                }}
+                className="w-full h-8 text-xs px-2.5 rounded-md border border-input bg-background focus:outline-none focus:ring-1 focus:ring-ring mb-1.5"
+              />
+              <div className="max-h-36 overflow-y-auto rounded-md border bg-white divide-y">
+                <button
+                  onClick={() => handleSelectCustomer(null)}
+                  className={cn('w-full text-left px-2.5 py-1.5 text-xs hover:bg-gray-50', !boundCustomer && 'bg-gray-50 text-gray-400')}
+                >
+                  不绑定客户
+                </button>
+                {loadingCustomers ? (
+                  <div className="px-2.5 py-2 text-xs text-gray-400 flex items-center gap-1.5">
+                    <Loader2 className="w-3 h-3 animate-spin" />加载中...
+                  </div>
+                ) : customers.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => { handleSelectCustomer(c); setShowContextPanel(false) }}
+                    className={cn('w-full text-left px-2.5 py-1.5 text-xs hover:bg-blue-50', boundCustomer?.id === c.id && 'bg-blue-50 text-blue-700')}
+                  >
+                    <div className="font-medium">{c.company_name}</div>
+                    {c.contact_name && <div className="text-gray-400">{c.contact_name}</div>}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Quotation selector */}
+            <div>
+              <label className="text-xs text-gray-500 mb-1.5 block">
+                绑定报价单{boundCustomer ? `（${boundCustomer.company_name}）` : ''}
+              </label>
+              <div className="max-h-[9.5rem] overflow-y-auto rounded-md border bg-white divide-y mt-[1.875rem]">
+                <button
+                  onClick={() => { setBoundQuotation(null) }}
+                  className={cn('w-full text-left px-2.5 py-1.5 text-xs hover:bg-gray-50', !boundQuotation && 'bg-gray-50 text-gray-400')}
+                >
+                  不绑定报价单
+                </button>
+                {loadingQuotations ? (
+                  <div className="px-2.5 py-2 text-xs text-gray-400 flex items-center gap-1.5">
+                    <Loader2 className="w-3 h-3 animate-spin" />加载中...
+                  </div>
+                ) : quotations.length === 0 ? (
+                  <div className="px-2.5 py-2 text-xs text-gray-400">暂无报价单</div>
+                ) : quotations.map((q) => (
+                  <button
+                    key={q.id}
+                    onClick={() => { handleSelectQuotation(q); setShowContextPanel(false) }}
+                    className={cn('w-full text-left px-2.5 py-1.5 text-xs hover:bg-blue-50', boundQuotation?.id === q.id && 'bg-blue-50 text-blue-700')}
+                  >
+                    <div className="font-medium">{q.quotation_number}</div>
+                    {q.total_amount_foreign && (
+                      <div className="text-gray-400">{q.currency} {q.total_amount_foreign.toFixed(2)}</div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Quick Actions */}
       <div className="flex items-center gap-2 px-4 py-3 border-b bg-white flex-shrink-0 overflow-x-auto">
-        <span className="text-xs text-gray-400 flex-shrink-0">快捷指令：</span>
+        <span className="text-xs text-gray-400 flex-shrink-0">快捷：</span>
         {QUICK_ACTIONS.map((action) => (
           <button
             key={action.label}
@@ -235,7 +437,11 @@ export default function AiPage() {
         <div className="flex gap-2 items-end max-w-4xl mx-auto">
           <Textarea
             ref={textareaRef}
-            placeholder="输入消息... (Enter 发送，Shift+Enter 换行)"
+            placeholder={
+              hasBoundContext
+                ? `针对 ${boundCustomer?.company_name || ''}${boundQuotation ? ` · ${boundQuotation.quotation_number}` : ''} 提问...`
+                : '输入消息... (Enter 发送，Shift+Enter 换行)'
+            }
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
