@@ -12,4 +12,4 @@ CREATE TABLE IF NOT EXISTS follow_up_tasks (
 );
 ALTER TABLE follow_up_tasks ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Users can manage own tasks" ON follow_up_tasks;
-CREATE POLICY "Users can manage own tasks" ON follow_up_tasks FOR ALL USING (auth.uid() = user_id);
+CREATE POLICY "Users can manage own tasks" ON follow_up_tasks FOR ALL USING (auth.uid() = follow_up_tasks.user_id);

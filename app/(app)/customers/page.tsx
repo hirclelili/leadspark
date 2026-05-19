@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   Users, Search, Plus, Loader2, Edit, Trash2,
-  ChevronLeft, ChevronRight, MoreVertical
+  ChevronLeft, ChevronRight, Globe, X
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -66,6 +66,7 @@ export default function CustomersPage() {
   const [limit] = useState(10)
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('all')
+  const [country, setCountry] = useState('')
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null)
@@ -88,6 +89,7 @@ export default function CustomersPage() {
     page?: number
     search?: string
     status?: string
+    country?: string
   }) => {
     // Abort previous in-flight request to prevent race conditions
     abortRef.current?.abort()
@@ -98,6 +100,7 @@ export default function CustomersPage() {
     const pageNum = opts?.page ?? page
     const searchStr = opts?.search !== undefined ? opts.search : search
     const statusStr = opts?.status !== undefined ? opts.status : status
+    const countryStr = opts?.country !== undefined ? opts.country : country
     try {
       const params = new URLSearchParams({
         page: String(pageNum),
@@ -105,6 +108,7 @@ export default function CustomersPage() {
       })
       if (searchStr) params.set('search', searchStr)
       if (statusStr && statusStr !== 'all') params.set('status', statusStr)
+      if (countryStr) params.set('country', countryStr)
 
       const res = await fetch(`/api/customers?${params}`, { signal: controller.signal })
       const data = await res.json().catch(() => ({}))
@@ -123,7 +127,7 @@ export default function CustomersPage() {
     } finally {
       setLoading(false)
     }
-  }, [page, search, status, limit])
+  }, [page, search, status, country, limit])
 
   useEffect(() => {
     fetchCustomers()
@@ -188,7 +192,8 @@ export default function CustomersPage() {
         setPage(1)
         setSearch('')
         setStatus('all')
-        await fetchCustomers({ page: 1, search: '', status: 'all' })
+        setCountry('')
+        await fetchCustomers({ page: 1, search: '', status: 'all', country: '' })
       } else {
         await fetchCustomers()
       }
@@ -368,8 +373,8 @@ export default function CustomersPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex gap-4 flex-wrap">
-        <div className="relative flex-1 min-w-[200px]">
+      <div className="flex gap-3 flex-wrap items-center">
+        <div className="relative flex-1 min-w-[180px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <Input
             className="pl-10"
@@ -381,8 +386,20 @@ export default function CustomersPage() {
             }}
           />
         </div>
+        <div className="relative min-w-[140px]">
+          <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Input
+            className="pl-9"
+            placeholder="按国家筛选..."
+            value={country}
+            onChange={(e) => {
+              setCountry(e.target.value)
+              setPage(1)
+            }}
+          />
+        </div>
         <Select value={status} onValueChange={(v) => { setStatus(v ?? 'all'); setPage(1) }}>
-          <SelectTrigger className="w-[150px]">
+          <SelectTrigger className="w-[130px]">
             <SelectValue placeholder="全部状态" />
           </SelectTrigger>
           <SelectContent>
@@ -392,6 +409,18 @@ export default function CustomersPage() {
             ))}
           </SelectContent>
         </Select>
+        {(search || country || status !== 'all') && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-gray-500"
+            onClick={() => {
+              setSearch(''); setCountry(''); setStatus('all'); setPage(1)
+            }}
+          >
+            <X className="w-4 h-4 mr-1" />清除筛选
+          </Button>
+        )}
       </div>
 
       {/* Customers List */}

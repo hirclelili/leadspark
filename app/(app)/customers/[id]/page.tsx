@@ -114,6 +114,7 @@ export default function CustomerDetailPage() {
   // AI side panel
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
   const [aiMode, setAiMode] = useState<'reply' | 'negotiate'>('reply')
+  const [selectedQuoteId, setSelectedQuoteId] = useState<string>('')
   const [aiGenerating, setAiGenerating] = useState(false)
   const [aiReplyResult, setAiReplyResult] = useState<{ subject: string; body: string } | null>(null)
   const [aiNegotiateResult, setAiNegotiateResult] = useState('')
@@ -216,10 +217,11 @@ export default function CustomerDetailPage() {
     setAiMode(mode)
     setAiReplyResult(null)
     setAiNegotiateResult('')
-    setAiPanelOpen(true)
-    if (mode === 'reply') {
-      handleGenerateReply()
+    // Default to first quotation when opening
+    if (quotations.length > 0 && !selectedQuoteId) {
+      setSelectedQuoteId(quotations[0].id)
     }
+    setAiPanelOpen(true)
   }
 
   const handleGenerateReply = async () => {
@@ -228,7 +230,7 @@ export default function CustomerDetailPage() {
     try {
       const companyName = userProfile?.company_name || ''
 
-      const q = quotations[0]
+      const q = quotations.find((x) => x.id === selectedQuoteId) || quotations[0]
       if (!q) { toast.error('该客户暂无报价记录'); setAiGenerating(false); return }
 
       const res = await fetch('/api/ai/generate-reply', {
@@ -270,7 +272,7 @@ export default function CustomerDetailPage() {
     setAiNegotiateResult('')
     setNegotiateMarginInfo(null)
     try {
-      const q = quotations[0]
+      const q = quotations.find((x) => x.id === selectedQuoteId) || quotations[0]
       const p0 = q?.products?.[0]
       const productName = p0?.name || customer?.company_name || '产品'
       const quotedPrice = p0?.unit_price_foreign || 0
@@ -732,7 +734,30 @@ export default function CustomerDetailPage() {
       >
         {aiMode === 'reply' ? (
           <div className="p-5 space-y-4">
-            <p className="text-sm text-gray-500">基于最近一条报价记录，自动生成专业英文报价回复邮件。</p>
+            <p className="text-sm text-gray-500">基于所选报价记录，自动生成专业英文报价回复邮件。</p>
+
+            {/* Quotation selector */}
+            {quotations.length > 1 && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-gray-500">选择报价记录</label>
+                <Select
+                  value={selectedQuoteId || quotations[0]?.id}
+                  onValueChange={(v) => { setSelectedQuoteId(v ?? ''); setAiReplyResult(null) }}
+                >
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {quotations.map((q) => (
+                      <SelectItem key={q.id} value={q.id}>
+                        <span className="font-mono">{q.quotation_number}</span>
+                        <span className="text-gray-400 ml-2 text-xs">{formatDate(q.created_at)}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             {aiGenerating && (
               <div className="flex items-center justify-center py-12 text-gray-400">
@@ -788,8 +813,31 @@ export default function CustomerDetailPage() {
           <div className="p-5 space-y-4">
             <p className="text-sm text-gray-500">粘贴客户的还价消息，AI 自动生成专业的议价回复邮件。</p>
 
+            {/* Quotation selector */}
+            {quotations.length > 1 && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-gray-500">选择报价记录</label>
+                <Select
+                  value={selectedQuoteId || quotations[0]?.id}
+                  onValueChange={(v) => { setSelectedQuoteId(v ?? ''); setAiNegotiateResult(''); setNegotiateMarginInfo(null) }}
+                >
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {quotations.map((q) => (
+                      <SelectItem key={q.id} value={q.id}>
+                        <span className="font-mono">{q.quotation_number}</span>
+                        <span className="text-gray-400 ml-2 text-xs">{formatDate(q.created_at)}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             {quotations[0] && (() => {
-              const q = quotations[0]
+              const q = quotations.find((x) => x.id === selectedQuoteId) || quotations[0]
               const p0 = q.products?.[0]
               const costPrice = p0?.cost_price
               const quotedPrice = p0?.unit_price_foreign
@@ -822,7 +870,7 @@ export default function CustomerDetailPage() {
 
             <div className="space-y-2">
               <label className="text-sm font-medium">最低可接受单价（可选）</label>
-              <Input type="number" placeholder={`如 ${quotations[0]?.currency || 'USD'} 10.00`}
+              <Input type="number" placeholder={`如 ${(quotations.find(x=>x.id===selectedQuoteId)||quotations[0])?.currency || 'USD'} 10.00`}
                 value={negotiateMinPrice} onChange={(e) => setNegotiateMinPrice(e.target.value)} />
             </div>
 
@@ -850,7 +898,7 @@ export default function CustomerDetailPage() {
                 </div>
                 <div className="flex justify-between text-gray-500 border-t pt-1">
                   <span>建议底价（保留15%）</span>
-                  <span>{quotations[0]?.currency} {negotiateMarginInfo.suggested_floor.toFixed(4)}</span>
+                  <span>{(quotations.find(x=>x.id===selectedQuoteId)||quotations[0])?.currency} {negotiateMarginInfo.suggested_floor.toFixed(4)}</span>
                 </div>
               </div>
             )}
