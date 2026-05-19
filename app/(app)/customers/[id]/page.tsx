@@ -50,6 +50,24 @@ interface Remark {
   id: string
   content: string
   created_at: string
+  remark_type?: string
+}
+
+const REMARK_TYPES = [
+  { value: 'note',    label: '备注', icon: '📝', color: 'bg-gray-100 text-gray-600' },
+  { value: 'call',    label: '通话', icon: '📞', color: 'bg-blue-100 text-blue-700' },
+  { value: 'email',   label: '邮件', icon: '✉️', color: 'bg-purple-100 text-purple-700' },
+  { value: 'meeting', label: '会议', icon: '🤝', color: 'bg-green-100 text-green-700' },
+  { value: 'issue',   label: '问题', icon: '⚠️', color: 'bg-red-100 text-red-700' },
+]
+
+function RemarkTypeBadge({ type }: { type?: string }) {
+  const t = REMARK_TYPES.find(r => r.value === type) || REMARK_TYPES[0]
+  return (
+    <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium ${t.color}`}>
+      <span>{t.icon}</span>{t.label}
+    </span>
+  )
 }
 
 const statusOptions = [
@@ -87,6 +105,7 @@ export default function CustomerDetailPage() {
 
   // Remark input
   const [remarkInput, setRemarkInput] = useState('')
+  const [remarkType, setRemarkType] = useState('note')
   const [addingRemark, setAddingRemark] = useState(false)
 
   // Task dialog
@@ -174,7 +193,7 @@ export default function CustomerDetailPage() {
       const res = await fetch(`/api/customers/${id}/remarks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: remarkInput }),
+        body: JSON.stringify({ content: remarkInput, remark_type: remarkType }),
       })
 
       const data = await res.json()
@@ -182,6 +201,7 @@ export default function CustomerDetailPage() {
         toast.error(data.error)
       } else {
         setRemarkInput('')
+        setRemarkType('note')
         setRemarks([data, ...remarks])
         toast.success('添加成功')
       }
@@ -311,6 +331,33 @@ export default function CustomerDetailPage() {
           返回
         </Button>
       </div>
+
+      {/* Stats bar */}
+      {!loading && quotations.length > 0 && (() => {
+        const totalValue = quotations.reduce((s, q) => s + (q.total_amount_foreign || 0), 0)
+        const currency = quotations[0]?.currency || 'USD'
+        const daysSince = Math.floor((Date.now() - new Date(quotations[0].created_at).getTime()) / 86400000)
+        const symbols: Record<string, string> = { USD: '$', EUR: '€', GBP: '£' }
+        const sym = symbols[currency] || currency
+        return (
+          <div className="grid grid-cols-3 gap-4">
+            <div className="bg-white border rounded-xl p-4 text-center">
+              <div className="text-2xl font-bold text-gray-800">{quotations.length}</div>
+              <div className="text-xs text-gray-400 mt-1">历史报价</div>
+            </div>
+            <div className="bg-white border rounded-xl p-4 text-center">
+              <div className="text-2xl font-bold text-blue-600">{sym}{totalValue.toLocaleString('en', { maximumFractionDigits: 0 })}</div>
+              <div className="text-xs text-gray-400 mt-1">累计报价金额</div>
+            </div>
+            <div className={`border rounded-xl p-4 text-center ${daysSince > 60 ? 'bg-orange-50 border-orange-200' : 'bg-white'}`}>
+              <div className={`text-2xl font-bold ${daysSince > 60 ? 'text-orange-500' : 'text-gray-800'}`}>
+                {daysSince === 0 ? '今天' : `${daysSince}天`}
+              </div>
+              <div className="text-xs text-gray-400 mt-1">距上次联系</div>
+            </div>
+          </div>
+        )
+      })()}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Customer Info */}
@@ -609,36 +656,57 @@ export default function CustomerDetailPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="flex gap-2 mb-4">
-              <Input
-                value={remarkInput}
-                onChange={(e) => setRemarkInput(e.target.value)}
-                placeholder="添加备注..."
-                onKeyDown={(e) => e.key === 'Enter' && handleAddRemark()}
-              />
-              <Button
-                onClick={handleAddRemark}
-                disabled={addingRemark || !remarkInput.trim()}
-              >
-                {addingRemark ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Plus className="h-4 w-4" />
-                )}
-              </Button>
+            {/* Type selector + input */}
+            <div className="space-y-2 mb-4">
+              <div className="flex gap-1.5">
+                {REMARK_TYPES.map((t) => (
+                  <button
+                    key={t.value}
+                    type="button"
+                    onClick={() => setRemarkType(t.value)}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                      remarkType === t.value
+                        ? t.color + ' border-transparent'
+                        : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'
+                    }`}
+                  >
+                    <span>{t.icon}</span>{t.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  value={remarkInput}
+                  onChange={(e) => setRemarkInput(e.target.value)}
+                  placeholder="添加备注..."
+                  onKeyDown={(e) => e.key === 'Enter' && handleAddRemark()}
+                />
+                <Button
+                  onClick={handleAddRemark}
+                  disabled={addingRemark || !remarkInput.trim()}
+                >
+                  {addingRemark ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Plus className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
             </div>
             {remarks.length === 0 ? (
               <p className="text-sm text-gray-500 text-center py-4">暂无备注</p>
             ) : (
               <div className="space-y-3">
                 {remarks.map((remark) => (
-                  <div
-                    key={remark.id}
-                    className="p-3 bg-gray-50 rounded-lg"
-                  >
-                    <div className="text-sm">{remark.content}</div>
-                    <div className="text-xs text-gray-400 mt-1">
-                      {formatDate(remark.created_at)}
+                  <div key={remark.id} className="p-3 bg-gray-50 rounded-lg">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start gap-2 flex-1">
+                        <RemarkTypeBadge type={remark.remark_type} />
+                        <div className="text-sm flex-1">{remark.content}</div>
+                      </div>
+                      <div className="text-xs text-gray-400 flex-shrink-0">
+                        {formatDate(remark.created_at)}
+                      </div>
                     </div>
                   </div>
                 ))}

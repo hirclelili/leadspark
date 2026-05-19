@@ -12,11 +12,14 @@ export async function POST(
     const { id } = await params
     const supabase = createAdminClient()
     const body = await request.json()
-    const { content } = body
+    const { content, remark_type } = body
 
     if (!content?.trim()) {
       return NextResponse.json({ error: '备注内容不能为空' }, { status: 400 })
     }
+
+    const validTypes = ['note', 'call', 'email', 'meeting', 'issue']
+    const safeType = validTypes.includes(remark_type) ? remark_type : 'note'
 
     const { data, error } = await supabase
       .from('customer_remarks')
@@ -24,6 +27,7 @@ export async function POST(
         customer_id: id,
         user_id: user.id,
         content: content.trim(),
+        remark_type: safeType,
       })
       .select()
       .single()

@@ -36,6 +36,17 @@ interface Customer {
   status: string
   notes: string | null
   created_at: string
+  last_quote_date: string | null
+}
+
+function LastQuoteCell({ date }: { date: string | null }) {
+  if (!date) return <span className="text-gray-300">—</span>
+  const days = Math.floor((Date.now() - new Date(date).getTime()) / 86400000)
+  if (days === 0) return <span className="text-green-600 text-xs">今天</span>
+  if (days === 1) return <span className="text-green-600 text-xs">昨天</span>
+  if (days <= 30) return <span className="text-gray-500 text-xs">{days} 天前</span>
+  if (days <= 60) return <span className="text-orange-500 text-xs">{days} 天前</span>
+  return <span className="text-red-400 text-xs font-medium">{days} 天前</span>
 }
 
 const statusOptions = [
@@ -401,10 +412,11 @@ export default function CustomersPage() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b text-left text-sm text-gray-500">
-                    <th className="py-3 px-4 w-[35%]">公司名称</th>
-                    <th className="py-3 px-4 w-[20%]">联系人</th>
-                    <th className="py-3 px-4 w-[15%]">国家</th>
-                    <th className="py-3 px-4 w-[15%]">状态</th>
+                    <th className="py-3 px-4 w-[30%]">公司名称</th>
+                    <th className="py-3 px-4 w-[15%]">联系人</th>
+                    <th className="py-3 px-4 w-[12%]">国家</th>
+                    <th className="py-3 px-4 w-[15%]">最近报价</th>
+                    <th className="py-3 px-4 w-[13%]">状态</th>
                     <th className="py-3 px-4 w-[15%]">操作</th>
                   </tr>
                 </thead>
@@ -423,6 +435,9 @@ export default function CustomersPage() {
                       </td>
                       <td className="py-3 px-4 text-gray-500 max-w-0">
                         <div className="truncate">{customer.country || '-'}</div>
+                      </td>
+                      <td className="py-3 px-4">
+                        <LastQuoteCell date={customer.last_quote_date} />
                       </td>
                       <td className="py-3 px-4">
                         <span

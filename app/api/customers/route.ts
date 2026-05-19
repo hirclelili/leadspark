@@ -31,7 +31,34 @@ export async function GET(request: Request) {
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-    return NextResponse.json({ customers: data || [], total: count || 0, page, limit })
+    const customers = data || []
+
+    // Enrich with last_quote_date (batch query to avoid N+1)
+    if (customers.length > 0) {
+      const customerIds = customers.map((c: any) => c.id)
+      const { data: latestQuotes } = await supabase
+        .from('quotations')
+        .select('customer_id, created_at')
+        .in('customer_id', customerIds)
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+
+      const latestByCustomer: Record<string, string> = {}
+      for (const q of latestQuotes || []) {
+        if (!latestByCustomer[q.customer_id]) {
+          latestByCustomer[q.customer_id] = q.created_at
+        }
+      }
+
+      const enriched = customers.map((c: any) => ({
+        ...c,
+        last_quote_date: latestByCustomer[c.id] || null,
+      }))
+
+      return NextResponse.json({ customers: enriched, total: count || 0, page, limit })
+    }
+
+    return NextResponse.json({ customers, total: count || 0, page, limit })
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
