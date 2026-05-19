@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   Users, Search, Plus, Loader2, Edit, Trash2,
-  ChevronLeft, ChevronRight, Globe, X
+  ChevronLeft, ChevronRight, Globe, X, FileSpreadsheet
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -24,6 +24,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { toast } from 'sonner'
+import { CustomerImportDialog } from '@/components/CustomerImportDialog'
 
 interface Customer {
   id: string
@@ -81,6 +82,7 @@ export default function CustomersPage() {
     notes: '',
   })
   const [saving, setSaving] = useState(false)
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
 
   // AbortController ref — cancels in-flight request when a newer one starts
   const abortRef = useRef<AbortController | null>(null)
@@ -246,6 +248,11 @@ export default function CustomersPage() {
           <Users className="w-6 h-6" />
           <h1 className="text-2xl font-bold">客户管理</h1>
         </div>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setImportDialogOpen(true)}>
+            <FileSpreadsheet className="mr-2 h-4 w-4 text-green-600" />
+            表格导入
+          </Button>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <Button onClick={() => handleOpenDialog()}>
             <Plus className="mr-2 h-4 w-4" />
@@ -370,7 +377,19 @@ export default function CustomersPage() {
             </div>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
+
+      {/* Import Dialog */}
+      <CustomerImportDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        onImported={() => {
+          setPage(1)
+          fetchCustomers({ page: 1 })
+          toast.success('客户导入成功，列表已刷新')
+        }}
+      />
 
       {/* Filters */}
       <div className="flex gap-3 flex-wrap items-center">
